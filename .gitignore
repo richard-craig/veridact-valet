@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+.venv/
+venv/
+*.db
+*.sqlite3
+extensions/keycloak-valet/target/
+.DS_Store
+.idea/
+.vscode/

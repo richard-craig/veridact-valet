@@ -1,0 +1,36 @@
+# Clickable demo: Marula Bank on http://localhost:8000, Kaya on http://localhost:8001
+#   docker compose up --build
+# Scripted demo and tests:
+#   docker compose run --rm demo
+#   docker compose run --rm demo pytest -q
+services:
+  bank:
+    build: .
+    command: uvicorn valet.bank.main:get_app --factory --host 0.0.0.0 --port 8000
+    environment:
+      BANK_PUBLIC_URL: http://localhost:8000      # the issuer; what the customer's browser sees
+      BANK_SESSION_SECRET: change-me-demo-only
+      VALET_DATA: /data
+    volumes: [valetdata:/data]
+    ports: ["8000:8000"]
+
+  kaya:
+    build: .
+    command: uvicorn valet.agent.kaya:get_app --factory --host 0.0.0.0 --port 8001
+    environment:
+      BANK_INTERNAL_URL: http://bank:8000         # how Kaya's server reaches the bank
+      BANK_PUBLIC_URL: http://localhost:8000      # where Kaya sends the customer's browser
+      KAYA_PUBLIC_URL: http://localhost:8001
+      VALET_DATA: /data
+    volumes: [valetdata:/data]
+    ports: ["8001:8001"]
+    depends_on: [bank]
+
+  demo:
+    build: .
+    profiles: ["demo"]
+    command: python demo.py
+    environment: {FORCE_COLOR: "1"}
+
+volumes:
+  valetdata:

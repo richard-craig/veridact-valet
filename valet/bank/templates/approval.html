@@ -1,0 +1,21 @@
+{% extends "base.html" %}{% block title %}Approve payment · {{ bank_name }}{% endblock %}
+{% block body %}
+<div class="top" style="margin-top:-6px"><span class="tag">Needs your decision</span></div>
+<div style="display:flex;flex-direction:column;gap:6px"><span class="sub">{{ a.agent.name }} wants to pay</span><span class="amount">{{ a.amount }}</span><b style="font-size:17px">to {{ a.to }}</b>{% if a.new %}<span class="tag">New recipient</span>{% endif %}</div>
+<div class="card" style="display:flex;flex-direction:column;gap:8px">
+<div class="row"><span>Requested by</span><span>{{ a.agent.name }} · {{ a.agent.operator }}</span></div>
+<div class="row"><span>From</span><span>{{ a.from }}</span></div>
+<div class="row"><span>To account</span><span>{{ a.to_account }}</span></div>
+{% if a.reference %}<div class="row"><span>Reference</span><span>{{ a.reference }}</span></div>{% endif %}
+</div>
+<div class="card" style="background:var(--bg);border:0;font-size:14px"><b>Why we're asking:</b> {{ a.reason }}.</div>
+{% if a.message %}<div class="card" style="font-size:14px"><span class="sub">{{ a.agent.name }}'s note (written by the agent, not the bank):</span><br>“{{ a.message }}”</div>{% endif %}
+<div class="warn">⚠ <span>{{ bank_name }} will never ask you to approve a payment so that you can receive money or a refund.</span></div>
+{% if a.status == 'pending' and a.seconds_left > 0 %}
+<p class="note">Covers this one payment only · expires in {{ a.seconds_left // 60 }}:{{ '%02d' % (a.seconds_left % 60) }}</p>
+<form method="post" action="/app/approvals/{{ a.id }}" style="display:flex;flex-direction:column;gap:10px"><input type="hidden" name="csrf" value="{{ csrf }}">
+<button class="btn" type="submit" name="decision" value="approve">Approve with fingerprint</button>
+<button class="btn ghost" type="submit" name="decision" value="deny">Decline</button></form>
+<a href="/app/agents/{{ a.grant_id }}" style="text-align:center;color:var(--red);font-weight:700;text-decoration:none">Something's wrong? Pause {{ a.agent.name }}</a>
+{% else %}<div class="card"><b>This request is {{ a.status }}.</b></div>{% endif %}
+{% endblock %}

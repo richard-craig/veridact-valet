@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block title %}Approvals · {{ bank_name }}{% endblock %}
+{% block body %}
+<a href="/app" style="color:var(--green);font-weight:700;text-decoration:none">← AI agents</a>
+<h1>Waiting for your decision</h1>
+<p class="sub">In the real app these arrive as push notifications.</p>
+{% for a in items %}
+<a class="card" href="/app/approvals/{{ a.id }}" style="text-decoration:none;color:inherit"><b>{{ a.agent.name }} wants to pay {{ a.amount }} to {{ a.to }}</b><div class="sub">{{ a.reason }} · {{ a.seconds_left // 60 }}:{{ '%02d' % (a.seconds_left % 60) }} left</div></a>
+{% else %}<div class="card sub">Nothing waiting.</div>{% endfor %}
+{% endblock %}

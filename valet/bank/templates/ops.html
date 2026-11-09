@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block title %}Bank operations (demo) · {{ bank_name }}{% endblock %}
+{% block body %}
+<h1>Bank operations (demo)</h1>
+<p class="sub">Simulates the bank, or Veridact, withdrawing trust in an agent's operator. Every grant for that agent stops at once.</p>
+{% for a in agents %}
+<form class="card agentrow" method="post" action="/ops/agents/{{ a.client_id }}/trust"><span class="av">{{ a.name[0] }}</span><div style="flex:1"><b>{{ a.client_id }}</b> · {{ a.operator }}<div class="sub">{{ 'Trusted' if a.trusted else 'Not trusted' }}</div></div>
+<input type="hidden" name="trusted" value="{{ '0' if a.trusted else '1' }}"><button class="linkbtn" type="submit">{{ 'Withdraw trust' if a.trusted else 'Restore trust' }}</button></form>
+{% endfor %}
+<h2>Receipt chain</h2>
+<div class="card">{% if chain.ok %}✓ {{ chain.count }} receipts, chain intact<div class="mono">head {{ chain.head[:30] }}…</div>{% else %}<span class="err">Broken at receipt {{ chain.broken_at }}: {{ chain.why }}</span>{% endif %}</div>
+{% endblock %}

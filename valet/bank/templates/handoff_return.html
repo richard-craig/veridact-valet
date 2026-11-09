@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block title %}Returning · {{ bank_name }}{% endblock %}
+{% block body %}
+<h1>{% if allowed %}Connected{% else %}Not connected{% endif %}</h1>
+<p class="sub">Taking you back to finish signing in…</p>
+<form id="back" method="post" action="{{ return_to }}">
+<input type="hidden" name="valet_result" value="{{ result }}">
+<noscript><button class="btn" type="submit">Continue</button></noscript>
+</form>
+<script>document.getElementById("back").submit();</script>
+{% endblock %}

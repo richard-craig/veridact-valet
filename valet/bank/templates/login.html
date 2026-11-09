@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block title %}Sign in · {{ bank_name }}{% endblock %}
+{% block body %}
+<h1>{% if step_up %}Confirm it's you{% else %}Sign in{% endif %}</h1>
+{% if step_up %}<p class="sub">You're about to give or approve an AI agent's access, so Marula needs a fresh sign-in.</p>{% endif %}
+<p class="sub">In the real app this is your fingerprint or face. The demo customer is <b>thandi</b> with password <b>demo</b>.</p>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<form method="post" action="/login" style="display:flex;flex-direction:column;gap:12px">
+<input type="hidden" name="next" value="{{ next }}">
+<label class="f">Username<input type="text" name="username" autocomplete="username" value="thandi"></label>
+<label class="f">Password<input type="password" name="password" autocomplete="current-password"></label>
+<button class="btn" type="submit">Sign in</button>
+</form>
+{% endblock %}

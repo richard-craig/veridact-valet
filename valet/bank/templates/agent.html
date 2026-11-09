@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% block title %}{{ g.agent.name }} · {{ bank_name }}{% endblock %}
+{% block body %}
+<a href="/app" style="color:var(--green);font-weight:700;text-decoration:none">← AI agents</a>
+<div class="agentrow"><span class="av">{{ g.agent.name[0] }}</span><div style="flex:1"><b style="font-size:20px">{{ g.agent.name }}</b><div class="ver">Verified by Veridact · {{ g.agent.operator }}</div></div><span class="pill {{ g.status }}">{{ g.status|capitalize }}</span></div>
+<div class="card" style="background:var(--bg);border:0;font-size:13px">{{ summary }}</div>
+{% if g.pending %}<a class="banner" href="/app/approvals">{{ g.agent.name }} is waiting for your decision →</a>{% endif %}
+<h2>Activity</h2>
+<div class="list">
+{% for it in items %}<div class="item {{ it.kind }}"><span class="dot"></span><div style="flex:1"><b>{{ it.title }}</b><div class="sub">{{ it.sub }}{% if it.sub %} · {% endif %}{{ it.date }} {{ it.time }}</div><div class="mono">receipt {{ it.hash }}…</div></div></div>
+{% endfor %}</div>
+<div style="flex:1"></div>
+{% if g.status == 'active' %}
+<form method="post" action="/app/agents/{{ g.id }}/pause"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost" type="submit">Pause {{ g.agent.name }}</button></form>
+{% elif g.status == 'paused' %}
+<form method="post" action="/app/agents/{{ g.id }}/resume"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn" type="submit">Resume {{ g.agent.name }}</button></form>
+{% endif %}
+{% if g.status in ('active', 'paused') %}
+<form method="post" action="/app/agents/{{ g.id }}/revoke"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn danger" type="submit">Disconnect {{ g.agent.name }}</button></form>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block title %}AI agents · {{ bank_name }}{% endblock %}
+{% block body %}
+<div><h1>Your AI agents</h1><div class="sub">{{ grants|length }} connected · none can see your password</div></div>
+{% if pending %}<a class="banner" href="/app/approvals">{{ pending }} request{{ '' if pending == 1 else 's' }} waiting for your decision →</a>{% endif %}
+{% for g in grants %}
+<a class="card" href="/app/agents/{{ g.id }}" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:10px">
+<div class="agentrow"><span class="av">{{ g.agent.name[0] }}</span><div style="flex:1"><b>{{ g.agent.name }}</b><div class="sub">{{ g.level_title }} · expires in {{ g.days_left }} days</div></div><span class="pill {{ g.status }}">{{ g.status|capitalize }}</span></div>
+{% if g.limit %}<div class="row"><span>Paid this month</span><span>{{ g.spent }} of {{ g.limit }}</span></div><div class="meter"><i style="width:{{ g.pct }}%"></i></div>{% endif %}
+{% if not g.trusted %}<div class="unver">The bank has stopped trusting this agent's operator</div>{% endif %}
+{% if g.last %}<div class="sub">Last: {{ g.last.title }}</div>{% endif %}
+</a>
+{% else %}
+<div class="card sub">No agents connected yet. Connect one from the assistant's app; you'll confirm here.</div>
+{% endfor %}
+<div style="flex:1"></div>
+{% if grants %}<form method="post" action="/app/pause-all"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost danger" type="submit">Pause all agents</button></form>{% endif %}
+{% endblock %}

@@ -1,0 +1,25 @@
+# Marula Bank customers sign in with Keycloak (federated mode). Any OpenID Connect provider works the same way.
+#   docker compose -f docker-compose.yml -f docker-compose.keycloak.yml up --build
+# Kaya: http://localhost:8001 · Marula Bank: http://localhost:8000 · Keycloak: http://localhost:8080 (admin / admin)
+# Sign in as thandi / demo on Keycloak's page.
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.0
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: http://localhost:8080          # the issuer the browser and ID tokens use
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"     # lets the bank reach token/JWKS endpoints at http://keycloak:8080
+    volumes: ["./deploy/keycloak:/opt/keycloak/data/import:ro"]
+    ports: ["8080:8080"]
+
+  bank:
+    environment:
+      CUSTOMER_IDP: oidc
+      OIDC_ISSUER: http://localhost:8080/realms/marula
+      OIDC_DISCOVERY_URL: http://keycloak:8080/realms/marula/.well-known/openid-configuration
+      OIDC_CLIENT_ID: marula-bank
+      OIDC_CLIENT_SECRET: marula-demo-secret
+      OIDC_CUSTOMER_CLAIM: preferred_username
+    depends_on: [keycloak]

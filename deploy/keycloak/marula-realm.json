@@ -1,0 +1,34 @@
+{
+  "realm": "marula",
+  "displayName": "Marula Bank (fictional)",
+  "enabled": true,
+  "sslRequired": "none",
+  "users": [
+    {
+      "username": "thandi",
+      "enabled": true,
+      "email": "thandi@example.com",
+      "emailVerified": true,
+      "firstName": "Thandi",
+      "lastName": "Mokoena",
+      "credentials": [{"type": "password", "value": "demo", "temporary": false}]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "marula-bank",
+      "name": "Marula Bank customer sign-in (Valet PoC)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "marula-demo-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": ["http://localhost:8000/login/callback"],
+      "webOrigins": ["http://localhost:8000"],
+      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "http://localhost:8000/*"}
+    }
+  ]
+}
