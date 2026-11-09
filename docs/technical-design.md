@@ -1,6 +1,6 @@
 # Veridact Valet: Technical Design
 
-Version 0.1 · 27 October 2026
+Version 0.2 · 9 November 2026
 
 ## 1. Scope and key decisions
 
@@ -8,10 +8,10 @@ Version 0.1 · 27 October 2026
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Protocol base | OAuth 2.0 authorisation code with PKCE, under the FAPI 2.0 security profile | What bank authorisation servers already run; no new trust model |
+| Protocol base | OAuth 2.0 authorisation code with PKCE, under the FAPI 2.0 security profile for the direct API; the MCP gateway's bearer tier does not meet FAPI 2.0 (§14) | What bank authorisation servers already run; no new trust model |
 | Request integrity | Pushed Authorization Requests (PAR, RFC 9126) | The agent cannot tamper with what the customer sees |
 | Permission format | Rich Authorization Requests (RAR, RFC 9396), two types: `valet_accounts` and `valet_payments` | Carries amounts, payees and accounts precisely; standard parsers exist |
-| Token binding | DPoP (RFC 9449) on every token | A stolen token is useless without the agent’s private key |
+| Token binding | DPoP (RFC 9449) on every token on the direct API; assistant platforms that cannot send DPoP yet get bearer-tier ceilings (§14) | A stolen token is useless without the agent’s private key |
 | Exceptions | OpenID CIBA, poll mode, with a one-time `valet_payment_once` authorisation detail | Approval happens in the bank app; the agent only waits |
 | Where limits live | The bank’s resource server, in its own ledger | Amounts and payees never leave the bank |
 | Agent identity | A pluggable `AgentRegistry`; the PoC uses a static signed list; production uses Veridact | Keeps Valet usable before Veridact is live |
@@ -138,7 +138,42 @@ An exception uses a third type, valid for one action only:
  "amount": {"amount": "1250.00", "currency": "ZAR"}, "reference": "Electricity Oct"}
 ```
 
-**Access levels are templates over these types:** *View only* is `valet_accounts` alone; *Bill payer* adds `valet_payments` with `pay_existing_beneficiary` and a monthly limit. The agent may ask for a level; the customer chooses on the consent screen, and the grant records what the customer chose, not what the agent asked for.
+**Access levels are templates over these types:** *View only* is `valet_accounts` alone; Approved payer adds valet\_payments, with every payment sent to the customer for approval in the bank app (the pilot default). *Bill payer* adds `valet_payments` with `pay_existing_beneficiary`, a per-payment cap, a maximum number of payments a month, and a monthly limit. The agent may ask for a level; the customer chooses on the consent screen, and the grant records what the customer chose, not what the agent asked for.
+
+### 3.1 Target data model: versioned mandates (proposed)
+
+The PoC's grant is one row whose terms and status change in place. The target model splits it into a stable **mandate** and immutable **mandate versions**, so every receipt names the exact terms that applied when the agent acted. Audit and disputes depend on this record, and it is the same record as the MCP gateway's mandate.
+
+| Entity | Key fields | Rules |
+| --- | --- | --- |
+| Mandate | mandate\_id, customer, pairwise sub, client\_id, status, current\_version, jkt, created | Stable identity; the token carries only mandate\_id. Status mirrors the latest status event |
+| Mandate version | mandate\_id, version, level, authorization\_details, intent, consent text hash, consent evidence (acr, auth\_time), change (create, narrow, widen, renew), changed by, valid\_from, expires, supersedes | Never updated or deleted. Narrowing needs no new consent; widening and renewal need the consent screen and step-up |
+| Status event | mandate\_id, status (active, paused, revoked, expired), actor, reason, time | Append-only: pause, resume and revoke are events, not edits |
+| Ledger | mandate\_id, month (South African time), spent, count, reserved | Changed only inside the locked limit check |
+| Reservation | id, mandate\_id, version, amount, idempotency key, status (held, confirmed, released), expiry | Held by the limit check; confirmed on payment, released on decline, failure or expiry |
+| Idempotency record | client\_id, idempotency key, request digest, outcome, expiry | Unique per agent and key; a retry returns the stored outcome |
+| Approval | As today, plus mandate\_id and version | Single use; counts towards the month's total and count |
+| Receipt | As today, plus mandate\_id, version, idempotency key, triggering instruction (agent-supplied, labelled), policy result, risk score | One hash chain per mandate |
+
+The payment detail gains named payees, a per-payment cap, a payment count and an approval mode:
+
+```json
+{
+  "type": "valet_payments",
+  "actions": ["pay_existing_beneficiary"],
+  "accounts": ["acc_123"],
+  "payees": ["ben_water", "ben_city_power"],
+  "approval": "approved_payer",
+  "limits": {
+    "per_payment": { "amount": "1000.00", "currency": "ZAR" },
+    "per_month": { "amount": "2000.00", "currency": "ZAR", "count": 4 }
+  }
+}
+```
+
+**How it is used.** Enforcement reads the mandate's current version on every call (§5). Each receipt names the version it was checked against, so a dispute replays the exact terms in force, even after the customer has narrowed or renewed the mandate.
+
+**Migration from the PoC.** Each grant becomes a mandate with version 1. Payees default to all existing beneficiaries and approval to bill\_payer, which matches today's behaviour.
 
 ## 4. Connect flow
 
@@ -181,10 +216,10 @@ grant_type=authorization_code&code=SplxlO…&code_verifier=dBjftJeZ4…
 | 4 | Agent still trusted in the `AgentRegistry` | 403 `agent_untrusted` |
 | 5 | Grant status is `active` (live lookup) and not expired | 403 `grant_paused`, `grant_revoked` or `grant_expired` |
 | 6 | The action is in `authorization_details` (type, action, account) | 403 `insufficient_authorization` |
-| 7 | Payments: payee is an existing beneficiary and the month’s total stays within the limit | 403 `approval_required`, with the exact `valet_payment_once` the agent should request |
-| 8 | Execute, debit the ledger, write a receipt | 200 with `receipt_id` |
+| 7 | Payments: payee is an existing beneficiary, the amount is within the per-payment cap, and the month’s count and total stay within the limits. The check and a reservation of the amount happen in one locked step per grant, so two parallel payments cannot both pass a limit only one fits under | 403 `approval_required`, with the exact `valet_payment_once` the agent should request |
+| 8 | Execute, confirm the reservation (released if the payment fails), write a receipt | 200 with `receipt_id` |
 
-Every outcome, allowed or refused, writes a receipt (§8). Step 5 is a database read on every call: that is what makes pause and revoke immediate, without waiting for tokens to expire.
+Every outcome, allowed or refused, writes a receipt (§8). Step 5 is a database read on every call: that is what makes pause and revoke immediate, without waiting for tokens to expire. The grant store is therefore on the critical path: if it cannot be reached, calls fail closed, so it needs an availability target at least as high as the banking API's.
 
 ```json
 HTTP/1.1 403 Forbidden
@@ -202,11 +237,11 @@ HTTP/1.1 403 Forbidden
 1. The bank API answers `403 approval_required` with the exact `valet_payment_once` detail (§5).
 2. The agent posts to `/bc-authorize`: client assertion, `login_hint` = its `grant_id`, the `authorization_details` it was given, and a short `binding_message` (its note to the customer). The bank refuses if the detail differs from what the API returned for that grant, if the grant is not active, or if the agent has more than 3 pending requests.
 3. The bank creates an approval (`auth_req_id`, 5-minute expiry), computes `action_digest` = SHA-256 of the JCS-canonical detail, and sends a push to the customer’s bank app. The prompt is built by the bank from the detail itself, never from agent-supplied text alone: amount, payee, account, “new recipient”, and why it was stopped. The agent’s note is shown separately and labelled as the agent’s words.
-4. The agent polls `/token` with `grant_type=urn:openid:params:grant-type:ciba`, `auth_req_id` and a DPoP proof, at the returned `interval` (5 seconds). Pending returns `authorization_pending`; a decline returns `access_denied`.
+4. The agent polls `/token` with `grant_type=urn:openid:params:grant-type:ciba`, `auth_req_id` and a DPoP proof, at the returned `interval` (2 seconds in the PoC, as in §10). Pending returns `authorization_pending`; a decline returns `access_denied`.
 5. On approval, the bank returns a one-time access token: same `cnf.jkt`, `authorization_details` = that single `valet_payment_once`, `once: true`, `exp` at the approval’s expiry.
 6. The agent retries the payment with that token. The API checks that the request matches the detail exactly (by digest), marks the approval consumed, executes and writes a receipt that names the approval.
 
-**Rules:** an approval never adds a beneficiary or raises a limit; it does not count against the monthly limit, because the customer approved the amount directly; a second use, a changed amount or payee, or an expired approval is refused with `approval_invalid`.
+**Rules:** an approval never adds a beneficiary or raises a limit; it counts towards the month’s total and payment count, so later payments see the true spend; only an approval offered because of the limit may take the month over it, and only by that one amount; a second use, a changed amount or payee, or an expired approval is refused with `approval_invalid`.
 
 ## 7. Pause, revoke and expiry
 
@@ -238,6 +273,11 @@ Access tokens last 5 minutes, but that is not the safety mechanism: the live gra
 - `basis` is `grant` (inside the customer’s signed level), `approval` (customer approved in the bank app) or `refused` with a reason. This maps one-to-one onto who carries the liability for each action.
 - Customers see their receipts in the agent’s activity page; the bank’s dispute team and auditors verify the chain with `/receipts/verify`.
 - Receipts stay at the bank. They hold no card numbers or credentials, and amounts and payees never leave the bank.
+- **One chain per grant.** Each grant has its own chain, and the bank publishes every chain's head on a schedule to a log operators can read. A flood of refused calls grows only that grant's chain, and nothing queues on one global sequence.
+- **Every party holds a copy.** Each API response carries its signed receipt, so the agent operator keeps its own copy and the customer sees it in the app. A dispute can then be settled from the same record without trusting one party's database.
+- **Personal data stays outside the chain.** Records hold pseudonymous ids and hashes. Names, account numbers and payee details sit in a separate table the bank can erase under POPIA without breaking the chain.
+- **Key rotation.** Each receipt names its signing key (kid), and retired public keys stay in /jwks, so old chains still verify.
+- **Also recorded.** The triggering instruction (agent-supplied, labelled as such), the idempotency key, and the policy result and any risk score, stored separately.
 
 ## 9. Agent identity and the Veridact interface
 
@@ -271,7 +311,7 @@ The consent screen shows the operator name only from the registry, never from th
 | `POST /bc-authorize` | Agent | `private_key_jwt` | Ask the customer to approve one action the API offered. `login_hint` is the grant id. Returns `auth_req_id`, `expires_in` 300, `interval` 2 |
 | `GET /api/accounts` | Agent | DPoP-bound token | Balances of the accounts in the grant |
 | `GET /api/accounts/{id}/transactions` | Agent | DPoP-bound token | Transactions within the grant's history window (90 days) |
-| `POST /api/payments` | Agent | DPoP-bound token (grant or single-use) | Pays, or holds as `approval_required` for a new recipient or over the monthly limit |
+| `POST /api/payments` | Agent | DPoP-bound token (grant or single-use) | Pays, or holds as `approval_required` for a new recipient or over the monthly limit. Requires an Idempotency-Key header: a retry with the same key returns the original outcome and never pays twice |
 | `POST /api/beneficiaries` | Agent | DPoP-bound token | Always refused, and recorded |
 | GET /login/callback | Browser | Returning from the bank's IdP | Federated mode: swaps the IdP's code (PKCE), checks the ID token, nonce and, at step-up, auth\_time; maps a claim to the customer |
 | POST /internal/grants | The bank's IdP | Shared secret in the PoC; mTLS in production | Native mode: registers a consent (customer, agent, level, account, monthly limit) under the bank's policy ceilings; returns the grant id and authorization\_details for the IdP's tokens |
@@ -434,3 +474,29 @@ python deploy/keycloak/setup_native.py
 **Not in the PoC** (a bank deployment needs these): passkeys or biometrics in the bank's IdP instead of a demo password; push notifications to the bank app; keys in an HSM or KMS rather than files; shared, highly available storage instead of SQLite; TLS and usually mTLS or a gateway (including mTLS for the grant service and asymmetric keys for the consent hand-off); the Veridact registry instead of `StaticRegistry`; native-mode hooks for Auth0 (an Action) and PingFederate, and Keycloak account-console disconnects reaching Valet (an event listener); runs against real Auth0, Entra ID, Okta and Ping tenants; a run through the OpenID FAPI 2.0 conformance suite.
 
 **Next steps:** run federated sign-in against the pilot bank's own IdP tenant; build the native-mode hook for that IdP if it qualifies (§12); `VeridactRegistry` against the Veridact directory; push approvals into a test build of a bank app; load-test the live status check on every call.
+
+## 14. Two front doors: the direct API and the MCP gateway
+
+Valet has one core profile and two ways in. Both run the check order in §5 on the same grant and write the same receipts; only how the agent's token is protected differs.
+
+|  | Direct API | MCP gateway |
+| --- | --- | --- |
+| Who connects | Agents built on the Valet SDK | Claude, ChatGPT, Copilot Studio, Gemini |
+| Token binding | DPoP on every token | Bearer today; DPoP when the platform supports it |
+| FAPI 2.0 | Designed to it; conformance run pending | Not met on the bearer tier |
+| Highest level | Bill payer | Approved payer on the bearer tier |
+| Specified in | This document | MCP Gateway design |
+
+**Assurance tiers.** The highest level a customer can grant follows how strongly the agent's token is bound.
+
+| Client assurance | Highest level |
+| --- | --- |
+| Bearer (assistant platforms today) | View only, or Approved payer |
+| DPoP-bound | Bill payer, within lower caps the bank sets |
+| DPoP-bound and Veridact-verified | Bill payer, with the bank's full caps |
+
+**One vocabulary.** The gateway's mandate is this document's grant: one record, the same RAR types and the same reason codes. Its three outcomes map onto §10: APPROVED is a 200, APPROVAL\_REQUIRED is approval\_required, and DECLINED is any other 403.
+
+**One enforcement engine.** The gateway calls the same enforcement component as the direct API, so each rule is written and tested once.
+
+**Agent identity on assistant platforms.** For Claude and ChatGPT, the OAuth client is the platform, not the individual agent, so Veridact cannot raise their tier yet.

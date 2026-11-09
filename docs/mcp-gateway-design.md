@@ -1,6 +1,6 @@
 # Veridact Valet: MCP Gateway & AI Assistant Connectors – Design
 
-Draft v0.1 · 29 October 2026 · Not yet built: this is the design for Valet's next feature.
+Draft v0.2 · 9 November 2026 · Not yet built: this is the design for Valet's next feature.
 
 ## Summary
 
@@ -96,7 +96,7 @@ The customer, not the agent, decides what the agent can do: the mandate is built
 | What it can do, per account | See balance; see transactions (with look-back window); see payees; request payments | See balance only |
 | Which payees | Pick from existing payees only; no new beneficiaries | None |
 | Payment limits | Per-payment cap; monthly total; payments per month | Payments off |
-| Approval mode | Approve every payment; approved payer; bill payer (offered only above the bearer tier) | Approve every payment |
+| Approval mode | Approved payer (the customer approves every payment in the bank app); bill payer (pays named payees within the caps without asking; offered only above the bearer tier) | Approved payer |
 | Data shown | Account numbers masked; counterparty names on or off | Masked |
 | Expiry | 7, 30 or 90 days | 30 days |
 
@@ -126,7 +126,7 @@ Valet owns the mandate; the identity platform only authenticates the customer an
 
 **Why the gateway looks the mandate up on every call.** Because the token is only a pointer, a narrowed or revoked mandate takes effect on the next call, with no need to wait for the token to expire.
 
-**Standards path.** The mandate model maps onto OAuth Rich Authorization Requests (RFC 9396) `authorization_details`, so Valet can expose it in that format to IdPs and clients that support it, without depending on them.
+**Standards path.** The mandate model maps onto OAuth Rich Authorization Requests (RFC 9396) `authorization_details`, so Valet can expose it in that format to IdPs and clients that support it, without depending on them. It uses the Technical Design's types (valet_accounts, valet_payments, valet_payment_once), so a mandate and a grant are one record.
 
 **What this makes Valet responsible for.** The mandate service becomes the system of record for customer consent. It runs inside the bank's boundary like the gateway, and needs high availability, POPIA-grade data handling, and an immutable history of every mandate version.
 
@@ -156,7 +156,7 @@ For Copilot and Gemini Enterprise, a company administrator grants the mandate on
 
 Claude and ChatGPT present plain bearer tokens today, so Valet makes those tokens worth little on their own. DPoP for MCP exists only as an optional extension, SEP-1932, and Claude Code [does not yet send DPoP proofs](https://github.com/anthropics/claude-code/issues/96290) even when the authorization server requires them.
 
-The threat is narrower than it looks. These connectors hold the token in the platform's cloud, not on the customer's device. Even with DPoP the key would sit on the same platform, so DPoP mainly protects against leaks in transit and in logs.
+The threat is narrower than it looks. These connectors hold the token in the platform's cloud, not on the customer's device. Even with DPoP the key would sit on the same platform, so DPoP mainly protects against leaks in transit and in logs. This bearer path does not meet FAPI 2.0, which requires sender-constrained tokens; say so plainly to bank security teams.
 
 | Control | What it stops |
 | --- | --- |
@@ -164,7 +164,7 @@ The threat is narrower than it looks. These connectors hold the token in the pla
 | Access tokens of about 5 minutes, audience-bound to the gateway's resource URI | Replay elsewhere and long-lived misuse. |
 | Opaque or phantom tokens | A leaked token reveals no customer data. |
 | Refresh token rotation with reuse detection | A replayed old refresh token revokes the whole token family. |
-| Platform egress IP allowlist | Tokens issued to the Claude or ChatGPT client only work from that platform's published ranges. |
+| Platform egress IP allowlist | Tokens issued to the Claude or ChatGPT client only work from that platform's published ranges (defence in depth only: the ranges change and the bank must track them). |
 | Mandate caps plus in-app payment approval | A thief can at most request a capped payment to an existing payee, which the customer must approve. |
 | Sender-constrained internal leg (mTLS or DPoP) | The token behind the gateway can't be replayed against bank APIs. |
 | Revocation checked on every call | A revoke in the bank app fails the agent's very next call. |
@@ -175,11 +175,11 @@ The gateway accepts DPoP now and requires it from clients that support it. The m
 
 | Client assurance | Example clients | Mandate ceiling |
 | --- | --- | --- |
-| Bearer, platform client | Claude, ChatGPT, Copilot Studio, Gemini today | Read-only, plus approval for every payment |
-| DPoP-bound | Clients once SEP-1932 ships; bank's own agents | Approved-payer limits |
-| DPoP-bound and Veridact-verified | Agents with a verified Veridact identity | Bill-payer mode with per-payment and monthly caps |
+| Bearer, platform client | Claude, ChatGPT, Copilot Studio, Gemini today | View only, or Approved payer (every payment approved in the bank app) |
+| DPoP-bound | Clients once SEP-1932 ships; bank's own agents | Bill payer, within lower caps the bank sets |
+| DPoP-bound and Veridact-verified | Agents with a verified Veridact identity | Bill payer, with the bank's full caps |
 
-This turns the DPoP gap into a sellable rule: the stronger the agent proves itself, the more it can do.
+This turns the DPoP gap into a sellable rule: the stronger the agent proves itself, the more it can do. For Claude and ChatGPT, though, the OAuth client is the platform, not the individual agent, so Veridact cannot raise their tier yet: retail customers on those platforms stay on the bearer tier until the platforms send DPoP and carry an agent-level identity.
 
 ## Tool surface for the pilot
 
@@ -211,7 +211,7 @@ Every money-moving call returns exactly one of three outcomes, and the gateway m
 | `APPROVAL_REQUIRED` | Within the mandate, but needs the customer (per-payment approval, or escalated by risk) | Wait; poll the status helper |
 | `DECLINED` | A hard rule failed (payee not in mandate, cap exceeded, mandate paused, expired or revoked) | Stop |
 
-Each outcome carries machine-readable reason codes, such as `PAYEE_NOT_IN_MANDATE`, `PER_PAYMENT_CAP_EXCEEDED` or `MONTHLY_LIMIT_EXCEEDED`. The same codes go into the receipt, so the agent, the customer and the bank read one explanation.
+Each outcome carries machine-readable reason codes, such as `PAYEE_NOT_IN_MANDATE`, `PER_PAYMENT_CAP_EXCEEDED` or `MONTHLY_LIMIT_EXCEEDED`. The same codes go into the receipt, so the agent, the customer and the bank read one explanation. These outcomes are the MCP form of the core API's results ([Technical Design](technical-design.md) §10 and §14): APPROVED is a 200, APPROVAL_REQUIRED is approval_required, and DECLINED is any other 403. Reason codes are defined once, in the core profile.
 
 **Requirements:**
 
@@ -219,6 +219,7 @@ Each outcome carries machine-readable reason codes, such as `PAYEE_NOT_IN_MANDAT
 2. **Serialised limit checks.** Checking the monthly limit, payment count and remaining budget, and reserving the amount, happen in one locked step per mandate. Two parallel payment calls can't both pass a cap that only one fits under. A reservation is released if the customer declines or the payment fails.
 3. **Idempotency on every write.** `bank.pay_existing_payee` requires an idempotency key from the agent. A retried call with the same key returns the original outcome and never creates a second payment or approval request.
 4. **Original decisions are immutable.** The customer's approve or decline is a new receipt linked to the original, never an edit to it.
+5. **Same checks as the core API.** The gateway calls the same enforcement component as the direct API ([Technical Design](technical-design.md) §5), not a second policy engine, so each rule is written and tested once.
 
 ## Connector build: Claude
 
