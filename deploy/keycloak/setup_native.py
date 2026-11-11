@@ -111,10 +111,14 @@ def setup_bank_and_customer(c: httpx.Client) -> None:
         cl |= {"redirectUris": [bank_url + "/login/callback"], "webOrigins": [bank_url],
                "secret": os.environ.get("BANK_CLIENT_SECRET", "marula-demo-secret")}
         ok(c.put(f"/clients/{cl['id']}", json=cl))
+    # Users in an imported realm file get no default roles, so without this Thandi lacks offline_access and Keycloak
+    # refuses any client that asks for a refresh token (the Claude app does: "Offline tokens not allowed").
+    default_role = ok(c.get(f"/roles/default-roles-{REALM}")).json()
     for u in ok(c.get("/users", params={"username": "thandi", "exact": "true"})).json():
         ok(c.put(f"/users/{u['id']}/reset-password",
                  json={"type": "password", "value": os.environ.get("DEMO_PASSWORD", "demo"), "temporary": False}))
-    print(f"  client 'marula-bank' -> {bank_url}/login/callback; customer 'thandi' password set")
+        ok(c.post(f"/users/{u['id']}/role-mappings/realm", json=[default_role]))
+    print(f"  client 'marula-bank' -> {bank_url}/login/callback; customer 'thandi' password and default roles set")
 
 
 CONSENT_SCOPES = ("consents:write", "consents:read")

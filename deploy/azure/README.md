@@ -38,7 +38,7 @@ re-running the script reuses it.
 
 ## Check it
 
-From a laptop with the repository and Python 3.11+ (`pip install -r requirements.txt`):
+From a laptop with the repository and Python 3.11+ (`pip install -r requirements.txt mcp`; without the `mcp` SDK the last check is skipped and you get 37/37):
 
 ```bash
 BANK_URL=https://bank.valet.<zone> KAYA_URL=https://kaya.valet.<zone> ACME_URL=https://acme.valet.<zone> \
@@ -60,7 +60,7 @@ DEMO_PASSWORD=<from secrets> CLAUDE_CLIENT_SECRET=<from secrets> python scripts/
 ```bash
 ssh azureuser@<ip>
 sudo /opt/valet/valet.sh status    # containers
-sudo /opt/valet/valet.sh reset     # clean slate before a rehearsal or the meeting (secrets kept)
+sudo /opt/valet/valet.sh reset     # clean slate before a rehearsal or the meeting (secrets and certificates kept)
 sudo /opt/valet/valet.sh logs
 sudo /opt/valet/valet.sh update    # pull the branch and rebuild
 ```
