@@ -109,7 +109,8 @@ cd /opt/valet
 dc() { docker compose -f docker-compose.native.yml -f docker-compose.vm.yml --env-file .env "\$@"; }
 case "\${1:-status}" in
   up) dc up -d --build ;;
-  reset) dc down -v --remove-orphans && dc up -d --build ;;
+  # reset wipes demo data but keeps caddydata: Let's Encrypt allows 5 certificates per host name per week
+  reset) dc down --remove-orphans && docker volume rm -f valet_valetdata && dc up -d --build ;;
   logs) dc logs -f --tail 100 ;;
   update) git pull --ff-only && dc up -d --build ;;
   *) dc ps ;;

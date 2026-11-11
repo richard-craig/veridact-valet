@@ -33,6 +33,12 @@ BANK = os.environ.get("BANK_URL", f"{SCHEME}://{HOST}:8000")
 ACME = os.environ.get("ACME_URL", f"{SCHEME}://{HOST}:8002")
 USER, PASSWORD = os.environ.get("DEMO_USER", "thandi"), os.environ.get("DEMO_PASSWORD", "demo")
 
+for _stream in (sys.stdout, sys.stderr):  # Windows consoles default to cp1252, which cannot print the demo's arrows
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+if os.name == "nt":
+    os.system("")  # turn on ANSI colours in the Windows console
+
 GREEN, RED, DIM, END = "\033[32m", "\033[31m", "\033[2m", "\033[0m"
 results: list[tuple[str, bool, str]] = []
 
