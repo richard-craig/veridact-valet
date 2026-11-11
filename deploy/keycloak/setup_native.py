@@ -55,8 +55,9 @@ def main() -> None:
 
     c = admin()
     # ---- clean slate for re-runs
-    for cl in ok(c.get("/clients", params={"clientId": "kaya"})).json():
-        ok(c.delete(f"/clients/{cl['id']}"))
+    for client_id in ("kaya", "acme-budgeting"):     # every client bound to the flow, before the flow itself
+        for cl in ok(c.get("/clients", params={"clientId": client_id})).json():
+            ok(c.delete(f"/clients/{cl['id']}"))
     for f in ok(c.get("/authentication/flows")).json():
         if f["alias"] == FLOW:
             ok(c.delete(f"/authentication/flows/{f['id']}"))
@@ -94,9 +95,56 @@ def main() -> None:
             {"name": "marula-api audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
              "config": {"included.custom.audience": "marula-api", "access.token.claim": "true",
                         "id.token.claim": "false", "introspection.token.claim": "true"}}]}))
+    setup_consent_app(c, flow_id)
     print(f"realm {REALM}: flow '{FLOW}' and client 'kaya' (kid {jwk['kid'][:12]}…) configured")
     for ex in ok(c.get(f"/authentication/flows/{quote(FLOW)}/executions")).json():
         print(f"  {'  ' * ex['level']}{ex['displayName']}: {ex['requirement']}")
+
+
+CONSENT_SCOPES = ("consents:write", "consents:read")
+ACME_REDIRECT = os.environ.get("ACME_PUBLIC_URL", "http://localhost:8002").rstrip("/") + "/callback"
+
+
+def setup_consent_app(c: httpx.Client, flow_id: str) -> None:
+    """Acme Budgeting: an app using the Consent Service. Client-credentials tokens (scopes consents:write/read,
+    audience valet-consent) to create consents; authorization code + PAR with consent_id for the customer's approval;
+    DPoP-bound tokens carrying the consent id as valet_grant."""
+    path = DATA / "apps" / "acme.json"
+    if not path.exists():
+        print("  (Acme Budgeting has not published its key yet: skipped; re-run after it starts)")
+        return
+    acme = json.loads(path.read_text())
+    jwk = {k: acme["jwk"][k] for k in ("kty", "crv", "x", "y")}
+    jwk |= {"use": "sig", "alg": "ES256", "kid": jwk_thumbprint(jwk)}
+    existing = {s_["name"]: s_["id"] for s_ in ok(c.get("/client-scopes")).json()}
+    for name in CONSENT_SCOPES:
+        if name not in existing:
+            ok(c.post("/client-scopes", json={"name": name, "protocol": "openid-connect",
+                                               "attributes": {"include.in.token.scope": "true",
+                                                              "display.on.consent.screen": "false"}}))
+    existing = {s_["name"]: s_["id"] for s_ in ok(c.get("/client-scopes")).json()}
+    for cl in ok(c.get("/clients", params={"clientId": acme["client_id"]})).json():
+        ok(c.delete(f"/clients/{cl['id']}"))
+    ok(c.post("/clients", json={
+        "clientId": acme["client_id"], "name": "Acme Budgeting (fictional third-party app)", "protocol": "openid-connect",
+        "enabled": True, "publicClient": False, "clientAuthenticatorType": "client-jwt", "standardFlowEnabled": True,
+        "serviceAccountsEnabled": True, "directAccessGrantsEnabled": False, "implicitFlowEnabled": False,
+        "redirectUris": [ACME_REDIRECT], "authenticationFlowBindingOverrides": {"browser": flow_id},
+        "attributes": {"valet.consent": "true", "use.jwks.string": "true", "jwks.string": json.dumps({"keys": [jwk]}),
+                       "token.endpoint.auth.signing.alg": "ES256", "dpop.bound.access.tokens": "true",
+                       "pkce.code.challenge.method": "S256", "require.pushed.authorization.requests": "true",
+                       "access.token.lifespan": os.environ.get("ACME_TOKEN_LIFESPAN", "600")},
+        "protocolMappers": [
+            {"name": "consent reference", "protocol": "openid-connect", "protocolMapper": "valet-grant-mapper",
+             "config": {"access.token.claim": "true", "introspection.token.claim": "true", "id.token.claim": "false",
+                        "userinfo.token.claim": "false"}},
+            *[{"name": f"{aud} audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+               "config": {"included.custom.audience": aud, "access.token.claim": "true", "id.token.claim": "false",
+                          "introspection.token.claim": "true"}} for aud in ("marula-api", "valet-consent")]]}))
+    cid = ok(c.get("/clients", params={"clientId": acme["client_id"]})).json()[0]["id"]
+    for name in CONSENT_SCOPES:
+        ok(c.put(f"/clients/{cid}/default-client-scopes/{existing[name]}"))
+    print(f"  client '{acme['client_id']}': client credentials + PAR with consent_id, DPoP, scopes {', '.join(CONSENT_SCOPES)}")
 
 
 if __name__ == "__main__":

@@ -252,3 +252,23 @@ def test_native_single_use_approval_from_the_banks_own_ciba():
         assert ei.value.error == "approval_invalid"
         assert h.bank.store.spent(g["grant_id"]) == 0
     run(t())
+
+
+def test_agent_learns_its_grant_from_the_bank_when_the_idp_has_no_rar():
+    async def t():
+        h, idp = native_harness()
+        g = (await register(h, monthly="1000.00")).json()
+        # a token like Keycloak's: valet_grant and key binding, but no authorization_details
+        use_token(h, idp.access_token(client_id="kaya", grant_id=g["grant_id"], jkt=h.kaya.key.thumbprint, details=[]),
+                  g["grant_id"])
+        mine = await h.kaya.grant()
+        assert mine["grant_id"] == g["grant_id"] and mine["level"] == "bill_payer" and mine["status"] == "active"
+        assert mine["authorization_details"] == g["authorization_details"]      # what the customer chose, from the bank
+        await h.kaya.pay(*WATER, "640.00")
+        assert (await h.kaya.grant())["spent_this_month"] == "640.00"
+        await h.login()
+        await h.grant_action(g["grant_id"], "pause")
+        with pytest.raises(ValetError) as ei:                                   # paused means paused, even for this
+            await h.kaya.grant()
+        assert ei.value.error == "grant_paused"
+    run(t())

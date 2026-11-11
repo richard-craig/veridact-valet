@@ -99,6 +99,16 @@ def router(bank: Bank) -> APIRouter:
             return d
         return None
 
+    # -------------------------------------------------------------- the agent's own grant
+    @r.get("/grant")
+    async def my_grant(c: Caller = Depends(caller)):
+        """What the customer actually granted (OAuth Grant Management style). Needed in native mode, where the bank's
+        IdP may not return authorization_details (Keycloak has no RAR); the customer may also have chosen less."""
+        g = c.grant
+        receipt(c, "read_grant", "allowed", "grant")
+        return {"grant_id": g["id"], "status": g["status"], "level": g["level"], "authorization_details": g["details"],
+                "expires_at": int(g["expires"]), "spent_this_month": to_str(store.spent(g["id"]))}
+
     # -------------------------------------------------------------- reads
     @r.get("/accounts")
     async def accounts(c: Caller = Depends(caller)):

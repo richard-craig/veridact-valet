@@ -69,10 +69,63 @@ def router(bank: Bank) -> APIRouter:
     def error_page(request: Request, msg: str) -> HTMLResponse:
         return render(request, "signin_error.html", bank, status=400, error=msg)
 
+    # ---------------------------------------------------- Consent Service consents (an app created consent_id first)
+    def consent_context(t: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:
+        svc = bank.consents
+        c = svc.row(str(t["consent_id"]))
+        if not c or c["client_id"] != t["client_id"]:
+            raise HandoffError("This app asked for a consent the bank does not know.")
+        if c["status"] != "AwaitingAuthorisation":
+            raise HandoffError(f"This request is no longer waiting for you ({c['status']}).")
+        cus = store.customer_for_idp(str(t.get("email") or "")) or store.customer_for_idp(str(t["customer"]))
+        if not cus:
+            raise HandoffError("You signed in, but no Marula Bank customer matches that identity.")
+        cl = svc.clients.get(c["client_id"])
+        if not cl:
+            raise HandoffError("This app is not onboarded with the bank.")
+        return dict(cus), c, cl
+
+    def eligible_accounts(cus: dict[str, Any], c: dict[str, Any]) -> list[Any]:
+        accts = store.q("SELECT * FROM accounts WHERE customer=?", cus["id"])
+        kinds = set()
+        for d in c["details"]:
+            kinds |= set((d.get("constraints") or {}).get("account_types") or [])
+        if not kinds:
+            return accts
+        kind = lambda a: "savings" if "savings" in a["name"].lower() else "cheque"   # noqa: E731 (demo accounts)
+        return [a for a in accts if kind(a) in kinds]
+
+    def consent_screen(request: Request, ticket: str, t: dict[str, Any]) -> HTMLResponse:
+        cus, c, cl = consent_context(t)
+        pays = any(d["type"] in ("payment_initiation", "recurring_payment", "delegated_action") for d in c["details"])
+        return render(request, "consent_authorise.html", bank, customer=cus, consent=c, client=cl,
+                      summary=bank.consents.plain_summary({**c, "resources": []}), accounts=eligible_accounts(cus, c),
+                      pays=pays, hidden={"ticket": ticket})
+
+    def consent_decision(form: Any, t: dict[str, Any]) -> dict[str, Any]:
+        import hashlib
+        cus, c, _ = consent_context(t)
+        svc = bank.consents
+        if form.get("decision") != "allow":
+            svc.transition(c, "Rejected", "customer_declined", by="customer")
+            return {"decision": "deny"}
+        ok = {a["id"]: a for a in eligible_accounts(cus, c)}
+        chosen = [a for a in form.getlist("account") if a in ok]
+        pays = any(d["type"] in ("payment_initiation", "recurring_payment", "delegated_action") for d in c["details"])
+        if not chosen or (pays and len(chosen) != 1):
+            raise HandoffError("Choose " + ("one account to pay from." if pays else "at least one account."))
+        resources = [{"resource_type": "account",
+                      "resource_id": "acc_" + hashlib.sha256(f"{c['id']}:{a}".encode()).hexdigest()[:12],
+                      "display": f"{ok[a]['name']} {ok[a]['number']}", "_account": a} for a in chosen]
+        svc.authorise(c, cus["id"], resources)
+        return {"decision": "allow", "grant_id": c["id"]}
+
     @r.get("/consent", response_class=HTMLResponse)
     def consent(request: Request, ticket: str = ""):
         try:
             t = read_ticket(ticket)
+            if t.get("consent_id"):
+                return consent_screen(request, ticket, t)
             cus, agent = context(t)
         except HandoffError as e:
             return error_page(request, str(e))
@@ -88,7 +141,10 @@ def router(bank: Bank) -> APIRouter:
         form = await request.form()
         try:
             t = read_ticket(str(form.get("ticket", "")))
-            cus, agent = context(t)
+            if t.get("consent_id"):
+                consent_context(t)
+            else:
+                cus, agent = context(t)
         except HandoffError as e:
             return error_page(request, str(e))
         # The ticket is single use: a replayed form cannot create a second grant.
@@ -96,7 +152,12 @@ def router(bank: Bank) -> APIRouter:
             return error_page(request, "This request has already been answered.")
         now = int(time.time())
         result: dict[str, Any] = {"iss": cfg.issuer, "aud": t["iss"], "iat": now, "exp": now + 120, "nonce": t["nonce"]}
-        if form.get("decision") == "allow":
+        if t.get("consent_id"):
+            try:
+                result |= consent_decision(form, t)
+            except HandoffError as e:
+                return error_page(request, str(e))
+        elif form.get("decision") == "allow":
             try:
                 g = create_grant(bank, cus, agent, str(form.get("level", "view_only")), str(form.get("account", "")),
                                  int(form.get("monthly") or 2_000_00), via="bank identity provider (consent hand-off)")

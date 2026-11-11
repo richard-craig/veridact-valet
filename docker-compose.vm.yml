@@ -1,0 +1,39 @@
+# Hosted demo on a VM, over HTTPS (needed: Keycloak 26's login cookies are Secure, and browsers only send those over
+# plain http to localhost). Point a DNS name at the VM, open ports 80, 443, 8000, 8001, 8002 and 8080, then:
+#
+#   export DEMO_HOST=valet-demo.example.com DEMO_SCHEME=https
+#   docker compose -f docker-compose.native.yml -f docker-compose.vm.yml up -d --build
+#   DEMO_HOST=$DEMO_HOST DEMO_SCHEME=https python scripts/preflight.py
+#
+# Change every secret in docker-compose.native.yml (or set them in .env) before exposing the demo.
+# Needs Docker Compose 2.24 or later (for !reset).
+services:
+  caddy:
+    image: caddy:2
+    environment:
+      DEMO_HOST: ${DEMO_HOST:?set DEMO_HOST to the VM's DNS name}
+    volumes:
+      - ./deploy/vm/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    ports: ["80:80", "443:443", "8000:8000", "8001:8001", "8002:8002", "8080:8080"]
+    depends_on: [keycloak, bank, kaya, acme]
+    restart: unless-stopped
+
+  keycloak:
+    ports: !reset []
+    environment:
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+    restart: unless-stopped
+  bank:
+    ports: !reset []
+    restart: unless-stopped
+  kaya:
+    ports: !reset []
+    restart: unless-stopped
+  acme:
+    ports: !reset []
+    restart: unless-stopped
+
+volumes:
+  caddydata:

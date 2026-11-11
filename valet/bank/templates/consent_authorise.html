@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block title %}Approve access · {{ bank_name }}{% endblock %}
+{% block body %}
+<h1>{{ client.name }} wants access</h1>
+<div class="card agentrow"><span class="av" style="background:var(--green)">{{ client.name[0] }}</span><div><b>{{ client.name }}</b><div class="sub">{{ client.legal_entity }}</div>
+{% if consent.actor %}<div class="sub">Acting through <b>{{ consent.actor.display_name or consent.actor.id }}</b> ({{ consent.actor.type|replace('_', ' ') }})</div>{% endif %}</div></div>
+<div class="card"><b>What you are agreeing to</b><p style="margin:6px 0 0">{{ summary }}</p></div>
+<form method="post" action="/handoff/decision" style="display:flex;flex-direction:column;gap:10px">
+{% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+<h2>{{ 'Pay from' if pays else 'Which accounts?' }}</h2>
+{% for a in accounts %}
+<label class="opt"><input type="{{ 'radio' if pays else 'checkbox' }}" name="account" value="{{ a.id }}" {% if loop.first %}checked{% endif %}><span><b>{{ a.name }}</b> {{ a.number }}</span></label>
+{% endfor %}
+<div class="never"><b>{{ client.name }} can never</b><br>See your password or PIN · do anything not listed above · keep access after it expires or after you stop it. Consent reference <span class="mono">{{ consent.id }}</span>.</div>
+<button class="btn" type="submit" name="decision" value="allow">Approve with fingerprint</button>
+<button class="btn ghost" type="submit" name="decision" value="deny">Decline</button>
+<p class="note">You can stop this at any time under Connected apps.</p>
+</form>
+{% endblock %}

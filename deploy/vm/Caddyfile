@@ -1,0 +1,15 @@
+# HTTPS front door for a hosted demo. Caddy gets a Let's Encrypt certificate for DEMO_HOST automatically
+# (ports 80 and 443 must be reachable from the internet for the certificate challenge).
+# Same ports as the local demo, so every URL stays https://DEMO_HOST:<8000|8001|8080>.
+{$DEMO_HOST}:8000 {
+	reverse_proxy bank:8000
+}
+{$DEMO_HOST}:8001 {
+	reverse_proxy kaya:8001
+}
+{$DEMO_HOST}:8002 {
+	reverse_proxy acme:8002
+}
+{$DEMO_HOST}:8080 {
+	reverse_proxy keycloak:8080
+}

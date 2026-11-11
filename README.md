@@ -63,6 +63,28 @@ What Valet adds on top of the standards, so each bank doesn't have to design, bu
 - **No lock-in**: Apache 2.0 licensed, built only on open standards, and it runs on the identity platform the bank
   already has.
 
+## Consent Service: one consent model for every application
+
+Valet's AI-agent grants are one case of a wider need: a **standard consent model any application can use**. The
+Consent Service ([`docs/consent-service-openapi.yaml`](docs/consent-service-openapi.yaml), live at
+`/consent/v1/docs`) follows the UK Open Banking intent-based pattern, generalised with RFC 9396 `authorization_details`:
+
+1. The app gets a client-credentials token from the bank's IdP (`private_key_jwt`, DPoP, scope `consents:write`)
+   and **creates the consent first**: `POST /consent/v1/consents` → `AwaitingAuthorisation`, no customer yet.
+2. It sends the customer to the bank's IdP with the `consent_id` (PAR). The IdP signs them in and hands them to
+   the bank's approval screen, which shows the consent in plain language; the customer picks accounts.
+3. The IdP's token carries **only a reference** (`valet_grant` = the consent id). The bank's APIs (`/ob/v1/...`)
+   ask for a decision on every call: `permit`, `deny` or `step_up_required`, with reserve-and-settle for amounts
+   and a signed receipt for each decision.
+4. Revoking (customer in the bank app under *Connected apps*, or the app itself) stops a still-valid token on its
+   next call, and the app receives a signed Security Event Token (RFC 8417) at its webhook.
+
+Types: `account_information`, `payment_initiation`, `recurring_payment`, `customer_profile` and
+`delegated_action` (with an `actor`, for AI agents and advisers). The demo app **Acme Budgeting**
+(`valet/apps/acme.py`, port 8002) runs this end to end through Keycloak in the native stack; `tests/test_consents.py`
+covers the rules. In the PoC the Consent Service and Valet's agent grants are separate stores; a bank deployment
+converges them on the consent store.
+
 ## Identity providers
 
 Valet does not replace the bank's identity platform. It works with it in one of two modes, and the banking API's
@@ -96,6 +118,19 @@ VALET_EXTERNAL_ISSUERS='[{"issuer": "https://login.bank.example/", "jwks_uri": "
                           "audience": "marula-api", "grant_claim": "valet_grant"}]'
 VALET_INTERNAL_SECRET=...      # PoC only: production uses mTLS between the IdP and Valet
 ```
+
+**Native mode on Keycloak in one command** (Docker; the first run builds Keycloak 26.4 with the extension baked in):
+
+```bash
+docker compose -f docker-compose.native.yml up --build    # wait for "valet-setup exited with code 0"
+python scripts/preflight.py                               # 13 checks through real Keycloak: READY or NOT READY
+docker compose -f docker-compose.native.yml down -v       # reset to a clean slate
+```
+
+Kaya on http://localhost:8001, Marula Bank on http://localhost:8000, Keycloak on http://localhost:8080
+(admin / admin); Thandi signs in as `thandi` / `demo` on Keycloak's page. For a hosted demo over HTTPS on a VM, add
+`docker-compose.vm.yml` (see the comments in it). It has to be HTTPS: Keycloak 26 marks its login cookies `Secure`,
+and browsers only send those over plain http to `localhost`.
 
 **Native mode on Keycloak** uses the extension in [`extensions/keycloak-valet`](extensions/keycloak-valet/README.md).
 Keycloak signs the customer in, then hands them to Valet's consent screen. It issues Kaya's DPoP-bound tokens

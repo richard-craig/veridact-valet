@@ -63,6 +63,22 @@ class ExternalIssuer:
                 break
         raise TokenRejected("signing key not published by the issuer")
 
+    def verify_client(self, token: str, audience: str) -> dict[str, Any]:
+        """A client-credentials token (an application calling the consent service): no consent reference needed."""
+        try:
+            header = jwt.get_unverified_header(token)
+            alg = header.get("alg")
+            if alg not in ACCESS_TOKEN_ALGS:
+                raise TokenRejected(f"algorithm {alg!r} not accepted")
+            claims = jwt.decode(token, self._key(header.get("kid"), alg), algorithms=[alg], audience=audience,
+                                issuer=self.issuer, leeway=30, options={"require": ["exp", "iat"]})
+        except jwt.PyJWTError as e:
+            raise TokenRejected(str(e)) from e
+        client_id = next((claims[c] for c in self.client_claims if claims.get(c)), None)
+        if not client_id:
+            raise TokenRejected("token does not name the client (client_id)")
+        return {**claims, "client_id": client_id}
+
     def verify(self, token: str) -> dict[str, Any]:
         """Verify and normalise to the claims Valet's enforcement reads."""
         try:

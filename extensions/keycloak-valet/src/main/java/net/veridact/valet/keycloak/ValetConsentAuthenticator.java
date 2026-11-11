@@ -31,7 +31,9 @@ import java.util.Map;
 public class ValetConsentAuthenticator implements Authenticator {
     static final String AGENT_ATTRIBUTE = "valet.agent";
     static final String NONCE_NOTE = "valet.nonce";
+    static final String CONSENT_ATTRIBUTE = "valet.consent";                     // apps using the Consent Service
     static final String LEVEL_PARAM_NOTE = "client_request_param_valet_level";   // ?valet_level=... on the request
+    static final String CONSENT_PARAM_NOTE = "client_request_param_consent_id";  // ?consent_id=... (Open Banking style)
 
     private static final Logger LOG = Logger.getLogger(ValetConsentAuthenticator.class);
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -48,7 +50,7 @@ public class ValetConsentAuthenticator implements Authenticator {
     public void authenticate(AuthenticationFlowContext ctx) {
         AuthenticationSessionModel auth = ctx.getAuthenticationSession();
         ClientModel client = auth.getClient();
-        if (!"true".equals(client.getAttribute(AGENT_ATTRIBUTE))) {
+        if (!"true".equals(client.getAttribute(AGENT_ATTRIBUTE)) && !"true".equals(client.getAttribute(CONSENT_ATTRIBUTE))) {
             ctx.success();                                   // ordinary applications are untouched
             return;
         }
@@ -71,6 +73,8 @@ public class ValetConsentAuthenticator implements Authenticator {
         ticket.put("client_id", client.getClientId());
         String level = auth.getClientNote(LEVEL_PARAM_NOTE);
         if (level != null) ticket.put("requested_level", level);
+        String consentId = auth.getClientNote(CONSENT_PARAM_NOTE);  // the app created this consent at the bank first
+        if (consentId != null) ticket.put("consent_id", consentId);
         ticket.put("return_to", ctx.getActionUrl(ctx.generateAccessCode()).toString());
 
         String to = UriBuilder.fromUri(s.consentUrl()).queryParam("ticket", HandoffToken.sign(ticket, s.secret())).build().toString();

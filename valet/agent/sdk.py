@@ -110,8 +110,11 @@ class ValetClient:
         grant_id = body.get("grant_id")
         if not grant_id:      # native mode: the bank's IdP carries the Valet grant id in the token (valet_grant)
             grant_id = jwt.decode(body["access_token"], options={"verify_signature": False}).get("valet_grant")
+        details = body.get("authorization_details") or []
+        if not details and getattr(self, "session", None) and self.session.grant_id == grant_id:
+            details = self.session.details          # refresh through an IdP without RAR: same grant, keep what we know
         self.session = Session(body["access_token"], body.get("refresh_token"), grant_id,
-                               body.get("authorization_details", []), time.time() + body.get("expires_in", 300) - 15)
+                               details, time.time() + body.get("expires_in", 300) - 15)
 
     # ------------------------------------------------------------ connect
     async def start_connect(self, level: str = "bill_payer", account_hint: str | None = None) -> tuple[str, PendingConnect]:
@@ -142,7 +145,13 @@ class ValetClient:
         body = await self._token_request({"grant_type": "authorization_code", "code": code,
                                           "redirect_uri": self.redirect_uri, "code_verifier": pending.verifier})
         self._store_tokens(body)
+        if not self.session.details:     # the token server could not say what was granted (no RAR): ask the bank
+            self.session.details = (await self.grant()).get("authorization_details", [])
         return self.session
+
+    async def grant(self) -> dict[str, Any]:
+        """The customer's current grant as the bank holds it: level, permissions, status, spend this month."""
+        return await self.call("GET", "/api/grant")
 
     async def refresh(self) -> None:
         body = await self._token_request({"grant_type": "refresh_token", "refresh_token": self.session.refresh_token})

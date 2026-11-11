@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Request
 
-from . import api, authz, grants, handoff, web
+from . import api, authz, consents, grants, handoff, openbanking, web
 from .config import BankConfig
 from .context import Bank, OAuthError
 from .registry import DEFAULT_TRUST, write_trust_file
@@ -21,11 +21,22 @@ def create_app(cfg: BankConfig | None = None, bank: Bank | None = None) -> FastA
     async def oauth_error(_: Request, e: OAuthError):
         return e.response()
 
+    @app.exception_handler(consents.Problem)
+    async def problem(request: Request, e: consents.Problem):
+        return e.response(request)
+
+    svc = bank.consents if getattr(bank, "consents", None) else consents.ConsentService(bank)
+    bank.consents = svc
+
     app.include_router(authz.router(bank))
     app.include_router(api.router(bank))
     app.include_router(web.router(bank))
     app.include_router(grants.router(bank))
     app.include_router(handoff.router(bank))
+    consent_api, consent_pages = consents.routers(bank, svc)
+    app.include_router(consent_api)
+    app.include_router(consent_pages)
+    app.include_router(openbanking.router(bank, svc))
     return app
 
 
