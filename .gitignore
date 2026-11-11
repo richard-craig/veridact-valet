@@ -10,3 +10,8 @@ extensions/keycloak-valet/target/
 .DS_Store
 .idea/
 .vscode/
+
+# Deployment secrets written by deploy/azure/deploy.sh
+valet-demo-secrets.env
+*.env
+!.env.example
