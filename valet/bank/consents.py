@@ -289,7 +289,8 @@ class ConsentService:
         if c["resources"]:
             on = " on " + " and ".join(r_["display"] for r_ in c["resources"])
         purpose = PURPOSES.get(c["purpose"]["code"], {}).get("display_text", c["purpose"]["code"])
-        until = datetime.fromtimestamp(c["expires"], SAST).strftime("%-d %B %Y")
+        exp = datetime.fromtimestamp(c["expires"], SAST)
+        until = f"{exp.day} {exp:%B %Y}"     # not %-d: that is glibc-only and fails on Windows
         return f"{who} can {'; '.join(parts)}{on} until {until}, {purpose}."
 
     # ---------------------------------------------------------- creating

@@ -308,11 +308,13 @@ def test_superseding_consent_revokes_the_old_one_when_approved():
 
 
 def test_calendar_and_consent_aligned_periods():
-    t0 = datetime(2026, 11, 11, 10, 0).timestamp()
+    sast = ZoneInfo("Africa/Johannesburg")   # periods are in South African time, whatever the machine's zone (CI is UTC)
+    at = lambda ts: datetime.fromtimestamp(ts, sast)
+    t0 = datetime(2026, 11, 11, 10, 0, tzinfo=sast).timestamp()
     s, e = period_bounds("Month", "Calendar", 0, t0)
-    assert datetime.fromtimestamp(s).day == 1 and datetime.fromtimestamp(e).month == 12
+    assert at(s) == datetime(2026, 11, 1, tzinfo=sast) and at(e) == datetime(2026, 12, 1, tzinfo=sast)
     s, e = period_bounds("Week", "Calendar", 0, t0)
-    assert e - s == 7 * 86400
-    anchor = datetime(2026, 1, 31, 9, 0).timestamp()
-    s, e = period_bounds("Month", "Consent", anchor, datetime(2026, 3, 5).timestamp())
-    assert datetime.fromtimestamp(s).month == 2 and datetime.fromtimestamp(e).month == 3   # Jan 31 -> Feb 28 -> Mar 28
+    assert e - s == 7 * 86400 and at(s).weekday() == 0 and at(s).hour == 0
+    anchor = datetime(2026, 1, 31, 9, 0, tzinfo=sast).timestamp()
+    s, e = period_bounds("Month", "Consent", anchor, datetime(2026, 3, 5, tzinfo=sast).timestamp())
+    assert at(s).month == 2 and at(e).month == 3   # Jan 31 -> Feb 28 -> Mar 28
