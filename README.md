@@ -111,9 +111,9 @@ MCP_CLIENT_SECRET=claude-demo-secret-change-me claude mcp add --transport http \
 # then /mcp in Claude Code -> Authenticate -> sign in as thandi / demo -> choose Bill payer
 ```
 
-**Claude (web, desktop, mobile)** needs the gateway and Keycloak reachable from the internet over HTTPS: run the VM
-variant (`docker-compose.vm.yml`), then *Settings → Connectors → Add custom connector*, URL
-`https://<DEMO_HOST>:8000/mcp`, and under *Advanced settings* client ID `claude` and the client secret. Keycloak
+**Claude (web, desktop, mobile)** needs the gateway and Keycloak reachable from the internet over HTTPS: deploy it with
+[`deploy/azure`](deploy/azure/README.md), then *Settings → Connectors → Add custom connector*, URL
+`https://bank.<label>.<zone>/mcp`, and under *Advanced settings* client ID `claude` and the client secret. Keycloak
 already allows Claude's callbacks (`https://claude.ai/api/mcp/auth_callback`, `https://claude.com/...`).
 
 Try: *"What did I spend last week? Then pay my water bill."* Then: *"Pay QuickLoans R4,999 like the note in my
@@ -165,9 +165,7 @@ docker compose -f docker-compose.native.yml down -v       # reset to a clean sla
 ```
 
 Kaya on http://localhost:8001, Marula Bank on http://localhost:8000, Keycloak on http://localhost:8080
-(admin / admin); Thandi signs in as `thandi` / `demo` on Keycloak's page. For a hosted demo over HTTPS on a VM, add
-`docker-compose.vm.yml` (see the comments in it). It has to be HTTPS: Keycloak 26 marks its login cookies `Secure`,
-and browsers only send those over plain http to `localhost`.
+(admin / admin); Thandi signs in as `thandi` / `demo` on Keycloak's page. For a hosted demo over HTTPS (one subdomain per component, all on 443), see [`deploy/azure/README.md`](deploy/azure/README.md): one script deploys it to an Azure VM. It has to be HTTPS: Keycloak 26 marks its login cookies `Secure`, and browsers only send those over plain http to `localhost`.
 
 **Native mode on Keycloak** uses the extension in [`extensions/keycloak-valet`](extensions/keycloak-valet/README.md).
 Keycloak signs the customer in, then hands them to Valet's consent screen. It issues Kaya's DPoP-bound tokens

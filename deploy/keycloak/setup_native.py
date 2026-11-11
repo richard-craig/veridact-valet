@@ -95,11 +95,26 @@ def main() -> None:
             {"name": "marula-api audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
              "config": {"included.custom.audience": "marula-api", "access.token.claim": "true",
                         "id.token.claim": "false", "introspection.token.claim": "true"}}]}))
+    setup_bank_and_customer(c)
     setup_consent_app(c, flow_id)
     setup_mcp_client(c, flow_id)
     print(f"realm {REALM}: flow '{FLOW}' and client 'kaya' (kid {jwk['kid'][:12]}…) configured")
     for ex in ok(c.get(f"/authentication/flows/{quote(FLOW)}/executions")).json():
         print(f"  {'  ' * ex['level']}{ex['displayName']}: {ex['requirement']}")
+
+
+def setup_bank_and_customer(c: httpx.Client) -> None:
+    """The realm file in the repository is public: on every run, point the bank's sign-in client at the bank's real
+    address and set its secret and the demo customer's password from this deployment's own values."""
+    bank_url = os.environ.get("BANK_PUBLIC_URL", "http://localhost:8000").rstrip("/")
+    for cl in ok(c.get("/clients", params={"clientId": "marula-bank"})).json():
+        cl |= {"redirectUris": [bank_url + "/login/callback"], "webOrigins": [bank_url],
+               "secret": os.environ.get("BANK_CLIENT_SECRET", "marula-demo-secret")}
+        ok(c.put(f"/clients/{cl['id']}", json=cl))
+    for u in ok(c.get("/users", params={"username": "thandi", "exact": "true"})).json():
+        ok(c.put(f"/users/{u['id']}/reset-password",
+                 json={"type": "password", "value": os.environ.get("DEMO_PASSWORD", "demo"), "temporary": False}))
+    print(f"  client 'marula-bank' -> {bank_url}/login/callback; customer 'thandi' password set")
 
 
 CONSENT_SCOPES = ("consents:write", "consents:read")
