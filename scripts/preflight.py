@@ -250,7 +250,7 @@ def mcp_gateway(b: Browser) -> None:
         return
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    q = {"response_type": "code", "client_id": "claude", "redirect_uri": CLAUDE_CALLBACK, "scope": "openid",
+    q = {"response_type": "code", "client_id": "claude", "redirect_uri": CLAUDE_CALLBACK, "scope": "openid offline_access",
          "state": "st-1", "code_challenge": challenge, "code_challenge_method": "S256", "resource": mcp_url}
     r = b.keycloak_login_if_asked(b.go("GET", meta["authorization_endpoint"] + "?" + httpx.QueryParams(q).__str__(),
                                        stop_at=CLAUDE_CALLBACK))
