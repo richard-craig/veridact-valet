@@ -23,6 +23,7 @@ class AgentRecord:
     verified: bool
     jwk: dict[str, Any]
     redirect_uris: list[str] = field(default_factory=list)
+    platform: bool = False        # an AI platform's OAuth client (e.g. Claude) reaching the bank via the MCP gateway
 
 
 class AgentRegistry(Protocol):
@@ -50,6 +51,11 @@ class StaticRegistry:
     def lookup(self, client_id: str) -> AgentRecord | None:
         entry = self._load().get(client_id)
         key_file = self.dir / "agents" / f"{client_id}.json"
+        if entry and entry.get("platform"):
+            # Platform clients hold no agent key: they authenticate to the bank's IdP and send bearer tokens to the
+            # MCP gateway, which caps what they can do (bearer tier: every payment approved in the bank app).
+            return AgentRecord(client_id=client_id, name=entry["name"], operator=entry["operator"],
+                               verified=bool(entry.get("verified")), jwk={}, platform=True)
         if not entry or not key_file.exists():
             return None
         pub = json.loads(key_file.read_text())
@@ -61,7 +67,8 @@ class StaticRegistry:
         if client_id in self._overrides:
             return self._overrides[client_id]
         rec = self.lookup(client_id)
-        return bool(rec and rec.verified)
+        # Veridact-verified agents, or AI platforms the bank has allowlisted (capped at the bearer tier by the gateway)
+        return bool(rec and (rec.verified or rec.platform))
 
     def set_trust(self, client_id: str, trusted: bool) -> None:
         """Simulates the bank, or Veridact, withdrawing trust in an agent operator."""
@@ -81,4 +88,6 @@ def publish_agent_key(data_dir: Path, client_id: str, jwk: dict[str, Any], redir
 DEFAULT_TRUST = {
     "kaya": {"name": "Kaya", "operator": "Kaya Labs (Pty) Ltd", "verified": True},
     "copycat": {"name": "Kaya", "operator": "Unknown operator", "verified": False},
+    "claude": {"name": "Claude", "operator": "Anthropic, through Marula Bank's MCP gateway", "verified": False,
+               "platform": True},
 }

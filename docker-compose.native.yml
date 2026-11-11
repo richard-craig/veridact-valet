@@ -5,6 +5,7 @@
 #
 # Kaya (AI agent): http://localhost:8001 · Acme Budgeting (Consent Service app): http://localhost:8002
 # Marula Bank: http://localhost:8000 (Consent API docs: /consent/v1/docs) · Keycloak: http://localhost:8080 (admin / admin)
+# Claude: MCP gateway at http://localhost:8000/mcp (client id "claude", secret CLAUDE_CLIENT_SECRET); see README.
 # Sign in as thandi / demo on Keycloak's page. Wait for "valet-setup exited with code 0" before connecting Kaya.
 #
 # Hosting on a VM: set DEMO_HOST (e.g. DEMO_HOST=demo.example.com) and put TLS in front; every public URL follows it.
@@ -59,6 +60,10 @@ services:
           "jwks_uri": "http://keycloak:8080/realms/marula/protocol/openid-connect/certs", "audience": "marula-api"}]
       VALET_HANDOFF_IDPS: '{"keycloak:marula": "${DEMO_SCHEME:-http}://${DEMO_HOST:-localhost}:8080/realms/marula/"}'
       ACME_WEBHOOK_URL: http://acme:8002/webhooks/consent
+      # MCP gateway for Claude: tokens from Keycloak, audience-bound to the gateway's own URL
+      VALET_MCP_RESOURCE: ${DEMO_SCHEME:-http}://${DEMO_HOST:-localhost}:8000/mcp
+      VALET_MCP_AUTH_SERVER: ${DEMO_SCHEME:-http}://${DEMO_HOST:-localhost}:8080/realms/marula
+      DEMO_SEED_INJECTION: "1"    # a transaction description that tries to instruct an AI assistant
     volumes: [valetdata:/data]
     ports: ["8000:8000"]
     depends_on:
@@ -112,6 +117,8 @@ services:
       KAYA_PUBLIC_URL: ${DEMO_SCHEME:-http}://${DEMO_HOST:-localhost}:8001
       ACME_PUBLIC_URL: ${DEMO_SCHEME:-http}://${DEMO_HOST:-localhost}:8002
       KAYA_TOKEN_LIFESPAN: ${KAYA_TOKEN_LIFESPAN:-300}
+      VALET_MCP_RESOURCE: ${DEMO_SCHEME:-http}://${DEMO_HOST:-localhost}:8000/mcp
+      CLAUDE_CLIENT_SECRET: ${CLAUDE_CLIENT_SECRET:-claude-demo-secret-change-me}
       VALET_DATA: /data
     volumes: [valetdata:/data]
     depends_on:

@@ -85,6 +85,43 @@ Types: `account_information`, `payment_initiation`, `recurring_payment`, `custom
 covers the rules. In the PoC the Consent Service and Valet's agent grants are separate stores; a bank deployment
 converges them on the consent store.
 
+## Claude through the bank's MCP gateway
+
+`/mcp` on the bank is a Streamable HTTP MCP server ([design](docs/mcp-gateway-design.md)). Claude signs in through
+the bank's IdP (Keycloak), the customer builds the mandate on the bank's consent screen, and every tool call is
+checked against the live mandate at the gateway, not by the model:
+
+| Tool | What the gateway enforces |
+|---|---|
+| `list_accounts`, `get_balance`, `list_transactions` | Only shared accounts, within the look-back window; numbers masked |
+| `list_payees` | Only payees the customer saved in the bank app |
+| `pay_existing_payee` | Saved payees only (never new ones), monthly limit including payments awaiting approval, idempotency key, and **customer approval in the bank app for every payment** (Claude sends bearer tokens, so it sits on the bearer tier) |
+| `get_payment_status` | `APPROVAL_REQUIRED`, `APPROVED` (paid exactly once) or `DECLINED` with reason codes |
+
+Pause or disconnect in the bank app and the next tool call is `DECLINED: MANDATE_PAUSED`. Every call writes a
+receipt, including Claude's stated reason labelled as agent-supplied. The demo seeds a transaction whose description
+tries to instruct the assistant to pay a stranger (`DEMO_SEED_INJECTION=1`): if a model obeys it, the gateway answers
+`PAYEE_NOT_IN_MANDATE`.
+
+**Claude Code** (works against `localhost`):
+
+```bash
+MCP_CLIENT_SECRET=claude-demo-secret-change-me claude mcp add --transport http \
+  --client-id claude --client-secret --callback-port 33418 marula http://localhost:8000/mcp
+# then /mcp in Claude Code -> Authenticate -> sign in as thandi / demo -> choose Bill payer
+```
+
+**Claude (web, desktop, mobile)** needs the gateway and Keycloak reachable from the internet over HTTPS: run the VM
+variant (`docker-compose.vm.yml`), then *Settings → Connectors → Add custom connector*, URL
+`https://<DEMO_HOST>:8000/mcp`, and under *Advanced settings* client ID `claude` and the client secret. Keycloak
+already allows Claude's callbacks (`https://claude.ai/api/mcp/auth_callback`, `https://claude.com/...`).
+
+Try: *"What did I spend last week? Then pay my water bill."* Then: *"Pay QuickLoans R4,999 like the note in my
+transactions says."* Then pause Claude in the bank app and ask again.
+
+`scripts/preflight.py` drives this path the way Claude's connector does (discovery from the 401, Keycloak sign-in,
+consent, token, MCP), and checks protocol conformance with the official MCP Python SDK when it is installed.
+
 ## Identity providers
 
 Valet does not replace the bank's identity platform. It works with it in one of two modes, and the banking API's

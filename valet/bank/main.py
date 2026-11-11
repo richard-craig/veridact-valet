@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Request
 
-from . import api, authz, consents, grants, handoff, openbanking, web
+from . import api, authz, consents, grants, handoff, mcp, openbanking, web
 from .config import BankConfig
 from .context import Bank, OAuthError
 from .registry import DEFAULT_TRUST, write_trust_file
@@ -37,6 +37,7 @@ def create_app(cfg: BankConfig | None = None, bank: Bank | None = None) -> FastA
     app.include_router(consent_api)
     app.include_router(consent_pages)
     app.include_router(openbanking.router(bank, svc))
+    app.include_router(mcp.router(bank))
     return app
 
 

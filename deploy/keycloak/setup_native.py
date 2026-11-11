@@ -55,7 +55,7 @@ def main() -> None:
 
     c = admin()
     # ---- clean slate for re-runs
-    for client_id in ("kaya", "acme-budgeting"):     # every client bound to the flow, before the flow itself
+    for client_id in ("kaya", "acme-budgeting", "claude"):     # every client bound to the flow, before the flow itself
         for cl in ok(c.get("/clients", params={"clientId": client_id})).json():
             ok(c.delete(f"/clients/{cl['id']}"))
     for f in ok(c.get("/authentication/flows")).json():
@@ -96,6 +96,7 @@ def main() -> None:
              "config": {"included.custom.audience": "marula-api", "access.token.claim": "true",
                         "id.token.claim": "false", "introspection.token.claim": "true"}}]}))
     setup_consent_app(c, flow_id)
+    setup_mcp_client(c, flow_id)
     print(f"realm {REALM}: flow '{FLOW}' and client 'kaya' (kid {jwk['kid'][:12]}…) configured")
     for ex in ok(c.get(f"/authentication/flows/{quote(FLOW)}/executions")).json():
         print(f"  {'  ' * ex['level']}{ex['displayName']}: {ex['requirement']}")
@@ -145,6 +146,35 @@ def setup_consent_app(c: httpx.Client, flow_id: str) -> None:
     for name in CONSENT_SCOPES:
         ok(c.put(f"/clients/{cid}/default-client-scopes/{existing[name]}"))
     print(f"  client '{acme['client_id']}': client credentials + PAR with consent_id, DPoP, scopes {', '.join(CONSENT_SCOPES)}")
+
+
+MCP_RESOURCE = os.environ.get("VALET_MCP_RESOURCE", "http://localhost:8000/mcp")
+CLAUDE_SECRET = os.environ.get("CLAUDE_CLIENT_SECRET", "claude-demo-secret-change-me")
+CLAUDE_REDIRECTS = ["https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback",
+                    "http://localhost/*", "http://127.0.0.1/*",
+                    *filter(None, os.environ.get("CLAUDE_EXTRA_REDIRECTS", "").split(","))]
+
+
+def setup_mcp_client(c: httpx.Client, flow_id: str) -> None:
+    """Claude, connecting through the bank's MCP gateway: a pre-registered confidential client (client secret),
+    authorization code + PKCE, bearer tokens (Claude sends no DPoP yet) audience-bound to the gateway, 5 minutes."""
+    ok(c.post("/clients", json={
+        "clientId": "claude", "name": "Claude (AI assistant, via the MCP gateway)", "protocol": "openid-connect",
+        "enabled": True, "publicClient": False, "clientAuthenticatorType": "client-secret", "secret": CLAUDE_SECRET,
+        "standardFlowEnabled": True, "directAccessGrantsEnabled": False, "implicitFlowEnabled": False,
+        "serviceAccountsEnabled": False, "redirectUris": CLAUDE_REDIRECTS,
+        "authenticationFlowBindingOverrides": {"browser": flow_id},
+        "attributes": {"valet.agent": "true", "pkce.code.challenge.method": "S256",
+                       "access.token.lifespan": os.environ.get("CLAUDE_TOKEN_LIFESPAN", "300"),
+                       "use.refresh.tokens": "true", "client.use.lightweight.access.token.enabled": "false"},
+        "protocolMappers": [
+            {"name": "valet mandate", "protocol": "openid-connect", "protocolMapper": "valet-grant-mapper",
+             "config": {"access.token.claim": "true", "introspection.token.claim": "true", "id.token.claim": "false",
+                        "userinfo.token.claim": "false"}},
+            {"name": "gateway audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+             "config": {"included.custom.audience": MCP_RESOURCE, "access.token.claim": "true",
+                        "id.token.claim": "false", "introspection.token.claim": "true"}}]}))
+    print(f"  client 'claude': confidential, PKCE, bearer tokens for {MCP_RESOURCE}")
 
 
 if __name__ == "__main__":
