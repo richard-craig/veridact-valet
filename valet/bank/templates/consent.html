@@ -2,7 +2,8 @@
 {% block body %}
 <h1>Connect an AI assistant</h1>
 <div class="card agentrow"><span class="av">{{ agent.name[0] }}</span><div><b>{{ agent.name }}</b><div class="sub">{{ agent.operator }}</div>
-{% if agent.verified %}<div class="ver">✓ Verified by Veridact</div>{% else %}<div class="unver">Not verified</div>{% endif %}</div></div>
+{% if agent.platform %}<div class="sub">Connects through the bank's MCP gateway</div>{% elif agent.verified %}<div class="ver">✓ Verified by Veridact</div>{% else %}<div class="unver">Not verified</div>{% endif %}</div></div>
+{% if agent.platform %}<div class="banner" style="font-weight:600">You approve every payment {{ agent.name }} asks for, in this app. {{ agent.name }} can only ask to pay people you have already saved.</div>{% endif %}
 <form method="post" action="{{ action | default('/authorize/decision') }}" style="display:flex;flex-direction:column;gap:10px">
 {% if hidden %}{% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
 {% else %}<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="client_id" value="{{ client_id }}"><input type="hidden" name="request_uri" value="{{ request_uri }}">{% endif %}

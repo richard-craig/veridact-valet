@@ -1,6 +1,6 @@
 # Veridact Valet: MCP Gateway & AI Assistant Connectors – Design
 
-Draft v0.2 · 9 November 2026 · Not yet built: this is the design for Valet's next feature.
+Draft v0.3 · 11 November 2026 · Pilot built: `valet/bank/mcp.py` implements the pilot tool surface against Keycloak (see the README). PingFederate, ChatGPT, Copilot and Gemini remain design.
 
 ## Summary
 

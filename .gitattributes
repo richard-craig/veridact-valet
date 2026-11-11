@@ -1,0 +1,6 @@
+# Shell scripts, the Caddyfile and compose files must keep LF endings (Windows checkouts run them in bash/Linux)
+*.sh text eol=lf
+Caddyfile text eol=lf
+*.yml text eol=lf
+*.py text eol=lf
+Dockerfile text eol=lf

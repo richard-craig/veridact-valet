@@ -1,0 +1,23 @@
+# HTTPS front door for a hosted demo: one subdomain per component, all on 443 (bank guest networks often block other
+# ports). Caddy gets Let's Encrypt certificates automatically; ports 80 and 443 must be reachable from the internet.
+{$BANK_HOST} {
+	reverse_proxy bank:8000
+}
+
+{$KAYA_HOST} {
+	reverse_proxy kaya:8001
+}
+
+{$ACME_HOST} {
+	reverse_proxy acme:8002
+}
+
+{$IDP_HOST} {
+	# Keycloak's admin console and master realm only from the admin's addresses; customers only ever use /realms/marula
+	@admin {
+		path /admin /admin/* /realms/master /realms/master/*
+		not remote_ip {$ADMIN_CIDR}
+	}
+	respond @admin "Not available" 403
+	reverse_proxy keycloak:8080
+}

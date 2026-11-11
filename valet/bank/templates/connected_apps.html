@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block title %}Connected apps · {{ bank_name }}{% endblock %}
+{% block body %}
+<div><h1>Connected apps</h1><div class="sub">Apps you have given access to. Stopping one takes effect on its very next request.</div></div>
+<a class="sub" href="/app">← AI agents</a>
+{% for c in items %}
+<div class="card" style="display:flex;flex-direction:column;gap:8px">
+<div class="agentrow"><span class="av" style="background:var(--green)">{{ c.client_display.name[0] }}</span><div style="flex:1"><b>{{ c.client_display.name }}</b><div class="sub">{{ c.purpose.code|replace('_', ' ')|capitalize }}</div></div>
+<span class="pill {{ 'active' if c.status == 'Authorised' else ('paused' if c.status == 'Suspended' else 'revoked') }}">{{ 'Active' if c.status == 'Authorised' else c.status }}</span></div>
+<div>{{ c.plain_language_summary }}</div>
+<div class="mono">{{ c.consent_id }} · last used {{ c.last_used_at or 'never' }}</div>
+{% if c.status == 'Authorised' %}<form method="post" action="/app/connected-apps/{{ c.consent_id }}/revoke"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost danger" type="submit">Stop {{ c.client_display.name }}</button></form>{% endif %}
+</div>
+{% else %}
+<div class="card sub">No apps connected.</div>
+{% endfor %}
+{% endblock %}

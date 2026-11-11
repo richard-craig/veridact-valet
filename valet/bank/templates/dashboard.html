@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block title %}AI agents · {{ bank_name }}{% endblock %}
 {% block body %}
-<div><h1>Your AI agents</h1><div class="sub">{{ grants|length }} connected · none can see your password</div></div>
+<div><h1>Your AI agents</h1><div class="sub">{{ grants|length }} connected · none can see your password · <a href="/app/connected-apps">Connected apps →</a></div></div>
 {% if pending %}<a class="banner" href="/app/approvals">{{ pending }} request{{ '' if pending == 1 else 's' }} waiting for your decision →</a>{% endif %}
 {% for g in grants %}
 <a class="card" href="/app/agents/{{ g.id }}" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:10px">

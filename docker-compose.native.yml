@@ -1,0 +1,135 @@
+# Native mode, one command: Keycloak signs the customer in AND issues the agent's tokens; Valet keeps the rules.
+#
+#   docker compose -f docker-compose.native.yml up --build        # first run builds Keycloak with the Valet extension
+#   docker compose -f docker-compose.native.yml down -v           # reset: wipes grants, receipts and Keycloak sessions
+#
+# Kaya (AI agent): http://localhost:8001 · Acme Budgeting (Consent Service app): http://localhost:8002
+# Marula Bank: http://localhost:8000 (Consent API docs: /consent/v1/docs) · Keycloak: http://localhost:8080 (admin / admin)
+# Claude: MCP gateway at http://localhost:8000/mcp (client id "claude", secret CLAUDE_CLIENT_SECRET); see README.
+# Sign in as thandi / demo on Keycloak's page. Wait for "valet-setup exited with code 0" before connecting Kaya.
+#
+# Hosted (HTTPS, one subdomain each): add docker-compose.vm.yml and set BANK_URL, KAYA_URL, ACME_URL, IDP_URL and the
+# secrets in .env (deploy/azure/deploy.sh does all of this on Azure). Every public URL follows those four variables.
+#
+# Addresses: the browser uses the public URLs; containers reach each other by service name. Keycloak's
+# dynamic backchannel gives containers keycloak:8080 endpoints while tokens keep the public issuer.
+
+x-demo-secrets: &secrets
+  VALET_HANDOFF_SECRET: ${VALET_HANDOFF_SECRET:-demo-handoff-secret-change-me-0123456789}
+  VALET_INTERNAL_SECRET: ${VALET_INTERNAL_SECRET:-demo-internal-secret-change-me-0123456789}
+
+services:
+  keycloak:
+    build: {context: ., dockerfile: deploy/keycloak/Dockerfile}
+    image: veridact-valet/keycloak:26.4.0
+    command: start-dev --import-realm
+    environment:
+      <<: *secrets
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-admin}
+      KC_HOSTNAME: ${IDP_URL:-http://localhost:8080}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+      VALET_CONSENT_URL: ${BANK_URL:-http://localhost:8000}/handoff/consent
+      VALET_ISSUER: ${BANK_URL:-http://localhost:8000}
+    ports: ["8080:8080"]
+    healthcheck:
+      # the Keycloak image has no curl: ask the management port with bash's /dev/tcp
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+  bank:
+    build: .
+    image: veridact-valet/app
+    command: uvicorn valet.bank.main:get_app --factory --host 0.0.0.0 --port 8000
+    environment:
+      <<: *secrets
+      BANK_PUBLIC_URL: ${BANK_URL:-http://localhost:8000}
+      BANK_SESSION_SECRET: ${BANK_SESSION_SECRET:-change-me-demo-only}
+      VALET_DATA: /data
+      CUSTOMER_IDP: oidc
+      OIDC_ISSUER: ${IDP_URL:-http://localhost:8080}/realms/marula
+      OIDC_DISCOVERY_URL: http://keycloak:8080/realms/marula/.well-known/openid-configuration
+      OIDC_CLIENT_ID: marula-bank
+      OIDC_CLIENT_SECRET: ${BANK_CLIENT_SECRET:-marula-demo-secret}
+      OIDC_CUSTOMER_CLAIM: preferred_username
+      VALET_EXTERNAL_ISSUERS: >-
+        [{"issuer": "${IDP_URL:-http://localhost:8080}/realms/marula",
+          "jwks_uri": "http://keycloak:8080/realms/marula/protocol/openid-connect/certs", "audience": "marula-api"}]
+      VALET_HANDOFF_IDPS: '{"keycloak:marula": "${IDP_URL:-http://localhost:8080}/realms/marula/"}'
+      ACME_WEBHOOK_URL: http://acme:8002/webhooks/consent
+      # MCP gateway for Claude: tokens from Keycloak, audience-bound to the gateway's own URL
+      VALET_MCP_RESOURCE: ${BANK_URL:-http://localhost:8000}/mcp
+      VALET_MCP_AUTH_SERVER: ${IDP_URL:-http://localhost:8080}/realms/marula
+      DEMO_SEED_INJECTION: "1"    # a transaction description that tries to instruct an AI assistant
+    volumes: [valetdata:/data]
+    ports: ["8000:8000"]
+    depends_on:
+      keycloak: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/.well-known/oauth-authorization-server', timeout=3)"]
+      interval: 3s
+      retries: 40
+
+  kaya:
+    image: veridact-valet/app
+    command: uvicorn valet.agent.kaya:get_app --factory --host 0.0.0.0 --port 8001
+    environment:
+      BANK_INTERNAL_URL: http://bank:8000
+      BANK_PUBLIC_URL: ${BANK_URL:-http://localhost:8000}
+      KAYA_PUBLIC_URL: ${KAYA_URL:-http://localhost:8001}
+      KAYA_CONNECT_VIA: http://keycloak:8080/realms/marula/.well-known/openid-configuration
+      VALET_DATA: /data
+    volumes: [valetdata:/data]
+    ports: ["8001:8001"]
+    depends_on:
+      bank: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/', timeout=3)"]
+      interval: 3s
+      retries: 40
+
+  acme:
+    image: veridact-valet/app
+    command: uvicorn valet.apps.acme:get_app --factory --host 0.0.0.0 --port 8002
+    environment:
+      BANK_INTERNAL_URL: http://bank:8000
+      ACME_PUBLIC_URL: ${ACME_URL:-http://localhost:8002}
+      ACME_IDP_DISCOVERY: http://keycloak:8080/realms/marula/.well-known/openid-configuration
+      VALET_DATA: /data
+    volumes: [valetdata:/data]
+    ports: ["8002:8002"]
+    depends_on:
+      bank: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/events.json', timeout=3)"]
+      interval: 3s
+      retries: 40
+
+  # one-shot: registers Kaya (its public key, DPoP, PAR, private_key_jwt) and the Valet consent flow in Keycloak
+  valet-setup:
+    image: veridact-valet/app
+    command: python deploy/keycloak/setup_native.py
+    environment:
+      KEYCLOAK_URL: http://keycloak:8080
+      KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-admin}
+      BANK_PUBLIC_URL: ${BANK_URL:-http://localhost:8000}
+      BANK_CLIENT_SECRET: ${BANK_CLIENT_SECRET:-marula-demo-secret}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-demo}
+      KAYA_PUBLIC_URL: ${KAYA_URL:-http://localhost:8001}
+      ACME_PUBLIC_URL: ${ACME_URL:-http://localhost:8002}
+      KAYA_TOKEN_LIFESPAN: ${KAYA_TOKEN_LIFESPAN:-300}
+      VALET_MCP_RESOURCE: ${BANK_URL:-http://localhost:8000}/mcp
+      CLAUDE_CLIENT_SECRET: ${CLAUDE_CLIENT_SECRET:-claude-demo-secret-change-me}
+      VALET_DATA: /data
+    volumes: [valetdata:/data]
+    depends_on:
+      kaya: {condition: service_healthy}
+      acme: {condition: service_healthy}
+    restart: "no"
+
+volumes:
+  valetdata:

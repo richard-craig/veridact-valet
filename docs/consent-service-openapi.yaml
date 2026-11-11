@@ -1,0 +1,1182 @@
+openapi: 3.1.0
+info:
+  title: Consent Service API
+  version: 1.0.0-draft
+  summary: Create, query, enforce and revoke customer consents (grants) for scoped, time-bound, revocable access.
+  description: |
+    The Consent Service owns the customer's consent ("mandate") as a first-class resource with its own ID,
+    status and lifecycle. Access tokens issued by the Authorization Server only *reference* a consent;
+    resource servers check the consent on every call.
+
+    The model follows the UK Open Banking intent-based consent pattern, generalised with
+    IETF RFC 9396 Rich Authorization Requests (`authorization_details`), secured per the
+    OpenID FAPI 2.0 Security Profile, with consent management aligned to
+    OpenID Grant Management for OAuth 2.0.
+
+    **Audiences**
+    - *Applications (clients)*: create consents, read their status, revoke them. Tag `Consents`.
+    - *Resource servers (bank APIs)*: ask for an access decision on each call. Tag `Enforcement`.
+    - *Bank customer channels*: list and revoke a customer's consents (consent dashboard). Tag `Customer`.
+
+    Field names are snake_case. Timestamps are RFC 3339 with offset. Amounts are decimal strings.
+
+    **Proof of concept:** implemented in `valet/bank/consents.py` (Veridact Valet). In the PoC the customer channel
+    uses the bank app's session rather than a first-party customer token, and the JWKS for consent events is
+    published at `/consent/v1/jwks`.
+  contact:
+    name: Veridact Valet project
+  license:
+    name: Apache-2.0
+servers:
+  - url: https://api.sandbox.bank.example/consent/v1
+    description: Sandbox
+  - url: https://api.bank.example/consent/v1
+    description: Production
+tags:
+  - name: Consents
+    description: Used by applications (OAuth clients) to manage consents they requested.
+  - name: Enforcement
+    description: Used by resource servers to decide whether a call is permitted under a consent.
+  - name: Customer
+    description: Used by the bank's own customer channels (app, internet banking) for the consent dashboard.
+  - name: Catalogue
+    description: Discoverable metadata — supported authorization_details types and purpose codes.
+
+security:
+  - clientCredentials: []
+  - mutualTLS: []
+
+paths:
+  /consents:
+    post:
+      tags: [Consents]
+      operationId: createConsent
+      summary: Create a consent (status AwaitingAuthorisation)
+      description: |
+        Step 1 of the intent-based flow. The application describes what it wants (authorization_details),
+        why (purpose) and for how long (expires_at). No customer is attached yet; the customer is bound
+        when they approve at the bank (step 3).
+
+        Requires a client-credentials access token with scope `consents:write`, obtained using mTLS or
+        `private_key_jwt` client authentication, and sender-constrained (mTLS or DPoP).
+
+        To amend an existing consent, create a new one with `supersedes` set. When the new one is
+        authorised, the old one moves to `Revoked` with reason `superseded`.
+      security:
+        - clientCredentials: [consents:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/InteractionId'
+        - $ref: '#/components/parameters/JwsSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsentRequest'
+            examples:
+              accountInformation:
+                $ref: '#/components/examples/CreateAccountInformationRequest'
+              recurringPayment:
+                $ref: '#/components/examples/CreateRecurringPaymentRequest'
+              delegatedAgent:
+                $ref: '#/components/examples/CreateDelegatedActionRequest'
+      responses:
+        '201':
+          description: Consent created, awaiting customer authorisation.
+          headers:
+            Location:
+              description: URL of the new consent.
+              schema: { type: string, format: uri }
+            x-fapi-interaction-id:
+              $ref: '#/components/headers/InteractionId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Consent'
+              examples:
+                accountInformation:
+                  $ref: '#/components/examples/ConsentAwaitingAuthorisation'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+    get:
+      tags: [Consents]
+      operationId: listConsents
+      summary: List consents created by the calling application
+      description: Returns only consents owned by the calling client. Never returns other clients' consents.
+      security:
+        - clientCredentials: [consents:read]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/ConsentStatus' }
+          style: form
+          explode: false
+        - name: type
+          in: query
+          description: Filter by authorization_details type.
+          schema: { type: string }
+        - name: updated_since
+          in: query
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/InteractionId'
+      responses:
+        '200':
+          description: A page of consents.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsentPage'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /consents/{consent_id}:
+    parameters:
+      - $ref: '#/components/parameters/ConsentId'
+      - $ref: '#/components/parameters/InteractionId'
+    get:
+      tags: [Consents]
+      operationId: getConsent
+      summary: Get a consent and its current status
+      description: |
+        Poll after the redirect returns, or rely on webhooks (`consent.status_changed`).
+        Once Authorised, the response includes the customer's selected resources but
+        never the customer's internal identifier.
+      security:
+        - clientCredentials: [consents:read]
+      responses:
+        '200':
+          description: The consent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Consent'
+              examples:
+                authorised:
+                  $ref: '#/components/examples/ConsentAuthorised'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Consents]
+      operationId: revokeConsent
+      summary: Revoke a consent (application-initiated)
+      description: |
+        Moves the consent to `Revoked` (or, if not yet authorised, to `Rejected` with reason
+        `cancelled_by_client`) and revokes all access and refresh tokens issued under it.
+        Idempotent: revoking an already-terminal consent returns 204.
+      security:
+        - clientCredentials: [consents:write]
+      parameters:
+        - name: reason
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [customer_request_in_app, service_ended, security_concern, other]
+      responses:
+        '204':
+          description: Revoked. All tokens for this consent are invalid.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /consents/{consent_id}/usage:
+    parameters:
+      - $ref: '#/components/parameters/ConsentId'
+      - $ref: '#/components/parameters/InteractionId'
+    get:
+      tags: [Consents]
+      operationId: getConsentUsage
+      summary: Get consumption against the consent's limits
+      description: For consents with amount or periodic limits (e.g. recurring_payment, delegated_action), returns how much of each limit is used in the current period.
+      security:
+        - clientCredentials: [consents:read]
+      responses:
+        '200':
+          description: Usage against limits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsentUsage'
+              examples:
+                recurring:
+                  $ref: '#/components/examples/UsageRecurring'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /consent-decisions:
+    post:
+      tags: [Enforcement]
+      operationId: decide
+      summary: Decide whether a resource-server call is permitted under a consent
+      description: |
+        Called by resource servers (or the API gateway) on every protected call, after validating the
+        access token. Returns `permit` or `deny` with a reason. For limit-bearing actions, a `permit`
+        with `reserve: true` atomically reserves the amount against the limit; confirm or release it
+        via /consent-decisions/{decision_id}.
+
+        Target latency: p99 < 20 ms. Resource servers may cache a `permit` for at most
+        `cache_ttl_seconds`; revocation events (`consent.status_changed`) must purge the cache.
+      security:
+        - clientCredentials: [consents:decide]
+      parameters:
+        - $ref: '#/components/parameters/InteractionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+            examples:
+              readTransactions:
+                $ref: '#/components/examples/DecisionRequestRead'
+              payment:
+                $ref: '#/components/examples/DecisionRequestPayment'
+      responses:
+        '200':
+          description: Decision made (permit or deny). A deny is a 200 here; the resource server maps it to 403.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+              examples:
+                permit:
+                  $ref: '#/components/examples/DecisionPermit'
+                denyLimit:
+                  $ref: '#/components/examples/DecisionDenyLimit'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /consent-decisions/{decision_id}:
+    parameters:
+      - name: decision_id
+        in: path
+        required: true
+        schema: { type: string }
+      - $ref: '#/components/parameters/InteractionId'
+    patch:
+      tags: [Enforcement]
+      operationId: settleDecision
+      summary: Confirm or release a reserved amount
+      security:
+        - clientCredentials: [consents:decide]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              properties:
+                outcome:
+                  type: string
+                  enum: [confirmed, released]
+                  description: confirmed = the action happened, keep the amount counted; released = it did not, return it to the limit.
+      responses:
+        '204': { description: Settled. }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /customers/me/consents:
+    get:
+      tags: [Customer]
+      operationId: listMyConsents
+      summary: List the signed-in customer's consents across all applications
+      description: For the bank's consent dashboard. Called with the customer's own access token (first-party channel).
+      security:
+        - customerAuth: [consents:self]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/ConsentStatus' }
+          style: form
+          explode: false
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: The customer's consents, with client display names.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerConsentPage'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /customers/me/consents/{consent_id}:
+    parameters:
+      - $ref: '#/components/parameters/ConsentId'
+    delete:
+      tags: [Customer]
+      operationId: revokeMyConsent
+      summary: Revoke one of the customer's consents (customer-initiated)
+      security:
+        - customerAuth: [consents:self]
+      responses:
+        '204': { description: Revoked. All tokens for this consent are invalid; the application is notified by webhook. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /catalogue/types:
+    get:
+      tags: [Catalogue]
+      operationId: listTypes
+      summary: List supported authorization_details types, their actions and constraints
+      security:
+        - clientCredentials: [consents:read]
+      responses:
+        '200':
+          description: The type catalogue.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [types]
+                properties:
+                  types:
+                    type: array
+                    items: { $ref: '#/components/schemas/TypeDescriptor' }
+
+  /catalogue/purposes:
+    get:
+      tags: [Catalogue]
+      operationId: listPurposes
+      summary: List approved purpose codes
+      security:
+        - clientCredentials: [consents:read]
+      responses:
+        '200':
+          description: The purpose catalogue.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [purposes]
+                properties:
+                  purposes:
+                    type: array
+                    items: { $ref: '#/components/schemas/PurposeDescriptor' }
+
+webhooks:
+  consentStatusChanged:
+    post:
+      tags: [Consents]
+      operationId: onConsentStatusChanged
+      summary: consent.status_changed — sent to the application's registered webhook URL
+      description: |
+        Sent whenever a consent changes status (authorised, rejected, revoked, expired, suspended, reinstated).
+        The body is a signed JWT (Security Event Token, RFC 8417) with `Content-Type: application/secevent+jwt`;
+        the decoded claims are shown here. Verify the signature against the Consent Service JWKS.
+        Respond 2xx within 5 seconds; failed deliveries are retried with exponential backoff for 24 hours.
+      requestBody:
+        content:
+          application/secevent+jwt:
+            schema:
+              $ref: '#/components/schemas/ConsentEvent'
+            examples:
+              revokedByCustomer:
+                $ref: '#/components/examples/EventRevoked'
+      responses:
+        '202': { description: Accepted. }
+
+components:
+  securitySchemes:
+    clientCredentials:
+      type: oauth2
+      description: |
+        Client-credentials grant. Client authentication MUST be `private_key_jwt` or `tls_client_auth`
+        (mTLS); client secrets are not accepted. Access tokens are sender-constrained (mTLS-bound or DPoP).
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.bank.example/as/token
+          scopes:
+            consents:write: Create and revoke consents owned by this client
+            consents:read: Read consents owned by this client and the catalogue
+            consents:decide: Resource servers only — request access decisions
+    customerAuth:
+      type: oauth2
+      description: First-party customer token for the bank's own channels.
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.bank.example/as/authorize
+          tokenUrl: https://auth.bank.example/as/token
+          scopes:
+            consents:self: View and revoke the signed-in customer's own consents
+    mutualTLS:
+      type: mutualTLS
+      description: All calls use mTLS with a certificate registered to the client.
+
+  parameters:
+    ConsentId:
+      name: consent_id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^cns_[A-Za-z0-9]{20,40}$' }
+      example: cns_8Fq2LkT0vR5wXc1YzA7bN3
+    IdempotencyKey:
+      name: x-idempotency-key
+      in: header
+      required: true
+      description: Unique per logical create. Retries with the same key and same body return the original response for 24 hours. Same key, different body returns 409.
+      schema: { type: string, minLength: 8, maxLength: 64 }
+      example: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+    InteractionId:
+      name: x-fapi-interaction-id
+      in: header
+      required: false
+      description: RFC 4122 UUID correlation ID. Echoed in the response; generated if absent.
+      schema: { type: string, format: uuid }
+    JwsSignature:
+      name: x-jws-signature
+      in: header
+      required: false
+      description: Optional detached JWS (RFC 7515 Appendix F) over the request body, signed with the client's registered key. Required for payment-bearing types in production.
+      schema: { type: string }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    PageCursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+
+  headers:
+    InteractionId:
+      description: Correlation ID for support and audit.
+      schema: { type: string, format: uuid }
+
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Missing, invalid or expired token, or token not sender-constrained.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Token lacks the scope, or the consent belongs to another client.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: No such consent for this caller.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: Idempotency key reused with a different body, or state transition not allowed.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unprocessable:
+      description: Request is well-formed but violates consent rules (unknown type, missing purpose, expiry too long, client not entitled to type).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            expiryTooLong:
+              $ref: '#/components/examples/ProblemExpiryTooLong'
+    TooManyRequests:
+      description: Rate limited. See Retry-After.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    ConsentStatus:
+      type: string
+      enum: [AwaitingAuthorisation, Authorised, Rejected, Revoked, Expired, Suspended]
+      description: |
+        - AwaitingAuthorisation: created by the app, not yet approved. Tokens: none.
+        - Authorised: approved and bound to a customer. Tokens valid within constraints.
+        - Rejected: customer declined, or app cancelled before approval. Terminal.
+        - Revoked: withdrawn by customer, app or bank. All tokens killed. Terminal.
+        - Expired: past expires_at, or not approved before authorisation_expires_at. Terminal.
+        - Suspended: bank risk/fraud hold. Tokens denied. Can return to Authorised.
+
+    ConsentRequest:
+      type: object
+      required: [authorization_details, purpose, expires_at]
+      additionalProperties: false
+      properties:
+        authorization_details:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { $ref: '#/components/schemas/AuthorizationDetail' }
+        purpose:
+          $ref: '#/components/schemas/Purpose'
+        expires_at:
+          type: string
+          format: date-time
+          description: When the consent stops being valid. Must not exceed the type's max_duration (see catalogue).
+        actor:
+          $ref: '#/components/schemas/Actor'
+        supersedes:
+          type: string
+          description: consent_id of a consent this one replaces (amendment). Must belong to the same client.
+        customer_hint:
+          type: string
+          description: Optional login hint shown to the bank to pre-fill the customer identifier. Not trusted for binding.
+        metadata:
+          type: object
+          description: Opaque client reference data, returned unchanged. Max 10 keys; no personal information.
+          maxProperties: 10
+          additionalProperties: { type: string, maxLength: 128 }
+
+    Consent:
+      type: object
+      required: [consent_id, status, client_id, authorization_details, purpose, created_at, status_updated_at, expires_at]
+      properties:
+        consent_id:
+          type: string
+          example: cns_8Fq2LkT0vR5wXc1YzA7bN3
+          description: Also the OAuth `grant_id` (Grant Management). Opaque; never reused.
+        status: { $ref: '#/components/schemas/ConsentStatus' }
+        status_reason:
+          type: string
+          description: Why the consent is in its current status.
+          enum: [customer_approved, customer_declined, cancelled_by_client, revoked_by_customer, revoked_by_client, revoked_by_bank, superseded, expired, authorisation_window_elapsed, risk_hold]
+        client_id: { type: string }
+        authorization_details:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationDetail' }
+          description: After authorisation, reflects what the customer actually granted (may be narrower than requested).
+        purpose: { $ref: '#/components/schemas/Purpose' }
+        actor: { $ref: '#/components/schemas/Actor' }
+        resources:
+          type: array
+          description: Resources (accounts, policies) the customer selected at authorisation. Empty until Authorised.
+          items: { $ref: '#/components/schemas/ResourceRef' }
+        created_at: { type: string, format: date-time }
+        status_updated_at: { type: string, format: date-time }
+        authorisation_expires_at:
+          type: string
+          format: date-time
+          description: Deadline for the customer to approve; after this an AwaitingAuthorisation consent becomes Expired. Default 15 minutes.
+        authorised_at: { type: [string, 'null'], format: date-time }
+        expires_at: { type: string, format: date-time }
+        revoked_at: { type: [string, 'null'], format: date-time }
+        last_used_at: { type: [string, 'null'], format: date-time }
+        supersedes: { type: [string, 'null'] }
+        superseded_by: { type: [string, 'null'] }
+        version: { type: integer, minimum: 1 }
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+        links:
+          type: object
+          properties:
+            self: { type: string, format: uri }
+            usage: { type: string, format: uri }
+
+    ConsentPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Consent' }
+        next_cursor: { type: [string, 'null'] }
+
+    CustomerConsent:
+      allOf:
+        - $ref: '#/components/schemas/Consent'
+        - type: object
+          properties:
+            client_display:
+              type: object
+              properties:
+                name: { type: string, example: Acme Budgeting }
+                logo_uri: { type: string, format: uri }
+                legal_entity: { type: string }
+            plain_language_summary:
+              type: string
+              example: Acme Budgeting can see balances and 6 months of transactions on Cheque Account ••4417 until 10 May 2027, to assess affordability.
+
+    CustomerConsentPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/CustomerConsent' }
+        next_cursor: { type: [string, 'null'] }
+
+    Purpose:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: Approved purpose code from /catalogue/purposes.
+          example: affordability_assessment
+        description:
+          type: string
+          maxLength: 280
+          description: Optional client wording; the bank shows the catalogue's approved text to the customer.
+
+    Actor:
+      type: object
+      description: A delegate acting for the customer under this consent (e.g. an AI agent, adviser, or sub-processor). Omit when the application itself acts.
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          enum: [ai_agent, adviser, sub_processor]
+        id:
+          type: string
+          description: Verifiable identifier of the actor (e.g. a DID or a registered client_id).
+          example: did:web:agents.acme.example:budget-assistant
+        display_name: { type: string }
+
+    ResourceRef:
+      type: object
+      required: [resource_type, resource_id]
+      properties:
+        resource_type:
+          type: string
+          enum: [account, card, policy, profile]
+        resource_id:
+          type: string
+          description: Opaque, consent-scoped identifier (not the account number).
+        display:
+          type: string
+          example: Cheque Account ••4417
+
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          pattern: '^\d{1,13}(\.\d{1,2})?$'
+          example: '5000.00'
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          example: ZAR
+
+    PeriodicLimit:
+      type: object
+      required: [period_type, period_alignment, max_amount]
+      properties:
+        period_type:
+          type: string
+          enum: [Day, Week, Fortnight, Month, Half-year, Year]
+        period_alignment:
+          type: string
+          enum: [Consent, Calendar]
+          description: Calendar = resets on calendar boundaries; Consent = periods start from authorised_at.
+        max_amount: { $ref: '#/components/schemas/Money' }
+        max_count:
+          type: integer
+          minimum: 1
+          description: Optional maximum number of actions in the period.
+
+    AuthorizationDetail:
+      description: RFC 9396 authorization detail. `type` selects the schema.
+      oneOf:
+        - $ref: '#/components/schemas/AccountInformationDetail'
+        - $ref: '#/components/schemas/PaymentInitiationDetail'
+        - $ref: '#/components/schemas/RecurringPaymentDetail'
+        - $ref: '#/components/schemas/CustomerProfileDetail'
+        - $ref: '#/components/schemas/DelegatedActionDetail'
+      discriminator:
+        propertyName: type
+        mapping:
+          account_information: '#/components/schemas/AccountInformationDetail'
+          payment_initiation: '#/components/schemas/PaymentInitiationDetail'
+          recurring_payment: '#/components/schemas/RecurringPaymentDetail'
+          customer_profile: '#/components/schemas/CustomerProfileDetail'
+          delegated_action: '#/components/schemas/DelegatedActionDetail'
+
+    AuthorizationDetailBase:
+      type: object
+      required: [type, actions]
+      properties:
+        type: { type: string }
+        actions:
+          type: array
+          minItems: 1
+          items: { type: string }
+        locations:
+          type: array
+          description: RFC 9396 locations — resource server base URIs this detail applies to.
+          items: { type: string, format: uri }
+
+    AccountInformationDetail:
+      allOf:
+        - $ref: '#/components/schemas/AuthorizationDetailBase'
+        - type: object
+          properties:
+            type: { const: account_information }
+            actions:
+              type: array
+              items:
+                type: string
+                enum: [read_accounts_basic, read_accounts_detail, read_balances, read_transactions_basic, read_transactions_detail, read_beneficiaries, read_standing_orders, read_statements]
+            constraints:
+              type: object
+              properties:
+                transactions_from: { type: string, format: date-time }
+                transactions_to: { type: string, format: date-time }
+                account_types:
+                  type: array
+                  items: { type: string, enum: [cheque, savings, credit_card, home_loan, vehicle_finance, investment] }
+
+    PaymentInitiationDetail:
+      allOf:
+        - $ref: '#/components/schemas/AuthorizationDetailBase'
+        - type: object
+          required: [instructed_amount, creditor]
+          properties:
+            type: { const: payment_initiation }
+            actions:
+              type: array
+              items: { type: string, enum: [initiate_payment] }
+            instructed_amount: { $ref: '#/components/schemas/Money' }
+            creditor:
+              type: object
+              required: [name, account]
+              properties:
+                name: { type: string }
+                account:
+                  type: object
+                  required: [scheme, identification]
+                  properties:
+                    scheme: { type: string, enum: [za_bank_account, payshap_proxy] }
+                    identification: { type: string }
+                    branch_code: { type: string }
+            reference: { type: string, maxLength: 20 }
+            requested_execution_date: { type: string, format: date }
+
+    RecurringPaymentDetail:
+      allOf:
+        - $ref: '#/components/schemas/AuthorizationDetailBase'
+        - type: object
+          required: [control_parameters]
+          properties:
+            type: { const: recurring_payment }
+            actions:
+              type: array
+              items: { type: string, enum: [initiate_payment] }
+            creditor:
+              type: object
+              description: Fixed payee (sweeping / subscription). Omit only if the type permits variable payees.
+              properties:
+                name: { type: string }
+                account:
+                  type: object
+                  properties:
+                    scheme: { type: string, enum: [za_bank_account, payshap_proxy] }
+                    identification: { type: string }
+                    branch_code: { type: string }
+            control_parameters:
+              type: object
+              required: [max_individual_amount, periodic_limits]
+              properties:
+                valid_from: { type: string, format: date-time }
+                valid_to: { type: string, format: date-time }
+                max_individual_amount: { $ref: '#/components/schemas/Money' }
+                periodic_limits:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/PeriodicLimit' }
+
+    CustomerProfileDetail:
+      allOf:
+        - $ref: '#/components/schemas/AuthorizationDetailBase'
+        - type: object
+          properties:
+            type: { const: customer_profile }
+            actions:
+              type: array
+              items: { type: string, enum: [read_profile, update_contact_details] }
+            fields:
+              type: array
+              items: { type: string, enum: [name, email, mobile, postal_address, residential_address] }
+
+    DelegatedActionDetail:
+      allOf:
+        - $ref: '#/components/schemas/AuthorizationDetailBase'
+        - type: object
+          description: An action performed by a delegate (see Consent.actor) on the customer's behalf. Requires `actor` on the consent.
+          properties:
+            type: { const: delegated_action }
+            actions:
+              type: array
+              description: Action codes from the catalogue for this use case.
+              items: { type: string }
+            control_parameters:
+              type: object
+              properties:
+                max_individual_amount: { $ref: '#/components/schemas/Money' }
+                periodic_limits:
+                  type: array
+                  items: { $ref: '#/components/schemas/PeriodicLimit' }
+                step_up_above:
+                  allOf: [{ $ref: '#/components/schemas/Money' }]
+                  description: Any single action above this amount requires live customer approval (CIBA/push) before the decision is permit.
+                allowed_hours:
+                  type: object
+                  properties:
+                    from: { type: string, pattern: '^\d{2}:\d{2}$', example: '06:00' }
+                    to: { type: string, pattern: '^\d{2}:\d{2}$', example: '22:00' }
+                    timezone: { type: string, example: Africa/Johannesburg }
+
+    ConsentUsage:
+      type: object
+      required: [consent_id, limits]
+      properties:
+        consent_id: { type: string }
+        as_of: { type: string, format: date-time }
+        limits:
+          type: array
+          items:
+            type: object
+            required: [period_type, period_start, period_end, max_amount, used_amount]
+            properties:
+              detail_index:
+                type: integer
+                description: Index into authorization_details.
+              period_type: { type: string }
+              period_start: { type: string, format: date-time }
+              period_end: { type: string, format: date-time }
+              max_amount: { $ref: '#/components/schemas/Money' }
+              used_amount: { $ref: '#/components/schemas/Money' }
+              reserved_amount: { $ref: '#/components/schemas/Money' }
+              used_count: { type: integer }
+              max_count: { type: [integer, 'null'] }
+
+    DecisionRequest:
+      type: object
+      required: [consent_id, client_id, type, action]
+      properties:
+        consent_id:
+          type: string
+          description: From the access token (`consent_id` / `grant_id` claim).
+        client_id:
+          type: string
+          description: From the access token. Must match the consent's client.
+        actor_id:
+          type: string
+          description: From the token's `act` claim, if a delegate is calling.
+        type: { type: string, example: account_information }
+        action: { type: string, example: read_transactions_detail }
+        resource:
+          $ref: '#/components/schemas/ResourceRef'
+        amount:
+          $ref: '#/components/schemas/Money'
+        reserve:
+          type: boolean
+          default: false
+          description: For amount-bearing actions, reserve the amount against limits on permit.
+        context:
+          type: object
+          description: Optional request context for audit (resource server name, endpoint).
+          additionalProperties: { type: string }
+
+    DecisionResponse:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [permit, deny, step_up_required]
+        reason:
+          type: string
+          enum: [ok, consent_not_found, consent_not_authorised, consent_expired, consent_revoked, consent_suspended, client_mismatch, actor_mismatch, action_not_granted, resource_not_granted, limit_exceeded, outside_allowed_hours, history_window_exceeded]
+        decision_id:
+          type: string
+          description: Present when an amount was reserved; settle via PATCH /consent-decisions/{decision_id}.
+        cache_ttl_seconds:
+          type: integer
+          description: How long a permit may be cached for identical requests without amounts. 0 = do not cache.
+        constraints:
+          type: object
+          description: Constraints the resource server must still apply to the response (e.g. transaction date window).
+          properties:
+            transactions_from: { type: string, format: date-time }
+            transactions_to: { type: string, format: date-time }
+            fields: { type: array, items: { type: string } }
+
+    ConsentEvent:
+      type: object
+      description: Decoded claims of the Security Event Token.
+      required: [iss, iat, jti, aud, events]
+      properties:
+        iss: { type: string, example: https://consent.bank.example }
+        iat: { type: integer }
+        jti: { type: string }
+        aud: { type: string, description: The receiving client_id. }
+        txn: { type: string, description: x-fapi-interaction-id of the triggering call, if any. }
+        events:
+          type: object
+          properties:
+            https://schemas.bank.example/events/consent/status_changed:
+              type: object
+              required: [consent_id, status, previous_status, changed_at]
+              properties:
+                consent_id: { type: string }
+                status: { $ref: '#/components/schemas/ConsentStatus' }
+                previous_status: { $ref: '#/components/schemas/ConsentStatus' }
+                status_reason: { type: string }
+                changed_at: { type: string, format: date-time }
+
+    TypeDescriptor:
+      type: object
+      properties:
+        type: { type: string }
+        description: { type: string }
+        actions: { type: array, items: { type: string } }
+        max_duration: { type: string, description: ISO 8601 duration, example: P12M }
+        requires_actor: { type: boolean }
+        requires_signed_request: { type: boolean }
+        client_entitlement_required: { type: boolean, description: Client must be onboarded for this type. }
+
+    PurposeDescriptor:
+      type: object
+      properties:
+        code: { type: string }
+        display_text: { type: string, description: Approved text shown to customers. }
+        allowed_types: { type: array, items: { type: string } }
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details.
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri, example: https://errors.bank.example/consent/expiry-exceeds-max }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        error_code:
+          type: string
+          enum: [invalid_request, invalid_authorization_details, unsupported_type, client_not_entitled, unknown_purpose, purpose_not_allowed_for_type, expiry_exceeds_max, expiry_in_past, actor_required, supersedes_invalid, idempotency_conflict, invalid_state_transition, consent_not_found, insufficient_scope, invalid_token, rate_limited]
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              pointer: { type: string, description: JSON Pointer to the offending field, example: /expires_at }
+              message: { type: string }
+        interaction_id: { type: string }
+
+  examples:
+    CreateAccountInformationRequest:
+      summary: Account information for an affordability check, 6 months
+      value:
+        authorization_details:
+          - type: account_information
+            actions: [read_accounts_basic, read_balances, read_transactions_detail]
+            locations: [https://api.bank.example/accounts/v1]
+            constraints:
+              transactions_from: '2026-05-01T00:00:00+02:00'
+              transactions_to: '2026-11-10T23:59:59+02:00'
+              account_types: [cheque, savings]
+        purpose:
+          code: affordability_assessment
+        expires_at: '2027-05-10T00:00:00+02:00'
+        metadata:
+          application_ref: LOAN-2026-004211
+    CreateRecurringPaymentRequest:
+      summary: Monthly subscription with per-payment and monthly caps
+      value:
+        authorization_details:
+          - type: recurring_payment
+            actions: [initiate_payment]
+            locations: [https://api.bank.example/payments/v1]
+            creditor:
+              name: Acme Gym (Pty) Ltd
+              account:
+                scheme: za_bank_account
+                identification: '62000000000'
+                branch_code: '250655'
+            control_parameters:
+              valid_from: '2026-12-01T00:00:00+02:00'
+              valid_to: '2027-11-30T23:59:59+02:00'
+              max_individual_amount: { amount: '750.00', currency: ZAR }
+              periodic_limits:
+                - period_type: Month
+                  period_alignment: Calendar
+                  max_amount: { amount: '750.00', currency: ZAR }
+                  max_count: 1
+        purpose:
+          code: subscription_payment
+        expires_at: '2027-11-30T23:59:59+02:00'
+    CreateDelegatedActionRequest:
+      summary: AI budgeting agent may move money between the customer's own accounts, capped
+      value:
+        authorization_details:
+          - type: account_information
+            actions: [read_balances, read_transactions_basic]
+          - type: delegated_action
+            actions: [transfer_between_own_accounts]
+            locations: [https://api.bank.example/transfers/v1]
+            control_parameters:
+              max_individual_amount: { amount: '5000.00', currency: ZAR }
+              periodic_limits:
+                - period_type: Month
+                  period_alignment: Calendar
+                  max_amount: { amount: '20000.00', currency: ZAR }
+              step_up_above: { amount: '2000.00', currency: ZAR }
+              allowed_hours: { from: '06:00', to: '22:00', timezone: Africa/Johannesburg }
+        purpose:
+          code: automated_savings
+        actor:
+          type: ai_agent
+          id: did:web:agents.acme.example:budget-assistant
+          display_name: Acme Budget Assistant
+        expires_at: '2027-06-30T23:59:59+02:00'
+    ConsentAwaitingAuthorisation:
+      summary: 201 response — no customer attached yet
+      value:
+        consent_id: cns_8Fq2LkT0vR5wXc1YzA7bN3
+        status: AwaitingAuthorisation
+        client_id: acme-budgeting-prod
+        authorization_details:
+          - type: account_information
+            actions: [read_accounts_basic, read_balances, read_transactions_detail]
+            locations: [https://api.bank.example/accounts/v1]
+            constraints:
+              transactions_from: '2026-05-01T00:00:00+02:00'
+              transactions_to: '2026-11-10T23:59:59+02:00'
+              account_types: [cheque, savings]
+        purpose:
+          code: affordability_assessment
+        resources: []
+        created_at: '2026-11-10T09:00:00+02:00'
+        status_updated_at: '2026-11-10T09:00:00+02:00'
+        authorisation_expires_at: '2026-11-10T09:15:00+02:00'
+        authorised_at: null
+        expires_at: '2027-05-10T00:00:00+02:00'
+        revoked_at: null
+        last_used_at: null
+        supersedes: null
+        superseded_by: null
+        version: 1
+        metadata:
+          application_ref: LOAN-2026-004211
+        links:
+          self: https://api.bank.example/consent/v1/consents/cns_8Fq2LkT0vR5wXc1YzA7bN3
+    ConsentAuthorised:
+      summary: After the customer approved and selected one account
+      value:
+        consent_id: cns_8Fq2LkT0vR5wXc1YzA7bN3
+        status: Authorised
+        status_reason: customer_approved
+        client_id: acme-budgeting-prod
+        authorization_details:
+          - type: account_information
+            actions: [read_accounts_basic, read_balances, read_transactions_detail]
+            locations: [https://api.bank.example/accounts/v1]
+            constraints:
+              transactions_from: '2026-05-01T00:00:00+02:00'
+              transactions_to: '2026-11-10T23:59:59+02:00'
+        purpose:
+          code: affordability_assessment
+        resources:
+          - resource_type: account
+            resource_id: acc_Zp41Qm9Tt2
+            display: Cheque Account ••4417
+        created_at: '2026-11-10T09:00:00+02:00'
+        status_updated_at: '2026-11-10T09:02:13+02:00'
+        authorised_at: '2026-11-10T09:02:13+02:00'
+        expires_at: '2027-05-10T00:00:00+02:00'
+        revoked_at: null
+        last_used_at: '2026-11-10T09:02:40+02:00'
+        version: 1
+        links:
+          self: https://api.bank.example/consent/v1/consents/cns_8Fq2LkT0vR5wXc1YzA7bN3
+    UsageRecurring:
+      value:
+        consent_id: cns_Qm2VwR8sN1xK4pL7aB0cD5
+        as_of: '2027-01-14T10:00:00+02:00'
+        limits:
+          - detail_index: 0
+            period_type: Month
+            period_start: '2027-01-01T00:00:00+02:00'
+            period_end: '2027-01-31T23:59:59+02:00'
+            max_amount: { amount: '750.00', currency: ZAR }
+            used_amount: { amount: '750.00', currency: ZAR }
+            reserved_amount: { amount: '0.00', currency: ZAR }
+            used_count: 1
+            max_count: 1
+    DecisionRequestRead:
+      summary: Resource server checks a transactions read
+      value:
+        consent_id: cns_8Fq2LkT0vR5wXc1YzA7bN3
+        client_id: acme-budgeting-prod
+        type: account_information
+        action: read_transactions_detail
+        resource: { resource_type: account, resource_id: acc_Zp41Qm9Tt2 }
+        context: { resource_server: accounts-api, endpoint: 'GET /accounts/{id}/transactions' }
+    DecisionRequestPayment:
+      summary: Agent-initiated transfer, reserve the amount
+      value:
+        consent_id: cns_T7yU3iO9pA2sD5fG8hJ1kL
+        client_id: acme-budgeting-prod
+        actor_id: did:web:agents.acme.example:budget-assistant
+        type: delegated_action
+        action: transfer_between_own_accounts
+        resource: { resource_type: account, resource_id: acc_Zp41Qm9Tt2 }
+        amount: { amount: '1500.00', currency: ZAR }
+        reserve: true
+    DecisionPermit:
+      value:
+        decision: permit
+        reason: ok
+        cache_ttl_seconds: 30
+        constraints:
+          transactions_from: '2026-05-01T00:00:00+02:00'
+          transactions_to: '2026-11-10T23:59:59+02:00'
+    DecisionDenyLimit:
+      value:
+        decision: deny
+        reason: limit_exceeded
+        cache_ttl_seconds: 0
+    EventRevoked:
+      summary: Customer revoked from the bank's dashboard
+      value:
+        iss: https://consent.bank.example
+        iat: 1794300000
+        jti: evt_4b1f0c9e
+        aud: acme-budgeting-prod
+        events:
+          https://schemas.bank.example/events/consent/status_changed:
+            consent_id: cns_8Fq2LkT0vR5wXc1YzA7bN3
+            status: Revoked
+            previous_status: Authorised
+            status_reason: revoked_by_customer
+            changed_at: '2026-12-02T18:21:07+02:00'
+    ProblemExpiryTooLong:
+      value:
+        type: https://errors.bank.example/consent/expiry-exceeds-max
+        title: Consent expiry exceeds the maximum for this type
+        status: 422
+        detail: account_information consents may last at most 12 months (P12M).
+        error_code: expiry_exceeds_max
+        errors:
+          - pointer: /expires_at
+            message: Must be on or before 2027-11-10T09:00:00+02:00
+        interaction_id: 3f1c2a9e-6b7d-4c1a-9f2e-8d5b7a6c4e21

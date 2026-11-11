@@ -1,0 +1,41 @@
+# Hosted demo over HTTPS, one subdomain per component, everything on 443. Use with docker-compose.native.yml:
+#
+#   docker compose -f docker-compose.native.yml -f docker-compose.vm.yml --env-file .env up -d --build
+#
+# .env (deploy/azure/deploy.sh writes it on Azure) sets the four public URLs, their host names, ADMIN_CIDR
+# and every secret. HTTPS is required: Keycloak 26 marks its login cookies Secure, and browsers only send those over
+# plain http to localhost. Needs Docker Compose 2.24 or later (for !reset).
+services:
+  caddy:
+    image: caddy:2
+    environment:
+      BANK_HOST: ${BANK_HOST:?set BANK_HOST}
+      KAYA_HOST: ${KAYA_HOST:?set KAYA_HOST}
+      ACME_HOST: ${ACME_HOST:?set ACME_HOST}
+      IDP_HOST: ${IDP_HOST:?set IDP_HOST}
+      ADMIN_CIDR: ${ADMIN_CIDR:?set ADMIN_CIDR, e.g. 196.25.1.10/32}
+    volumes:
+      - ./deploy/vm/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    ports: ["80:80", "443:443"]
+    depends_on: [keycloak, bank, kaya, acme]
+    restart: unless-stopped
+
+  keycloak:
+    ports: !reset []
+    environment:
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+    restart: unless-stopped
+  bank:
+    ports: !reset []
+    restart: unless-stopped
+  kaya:
+    ports: !reset []
+    restart: unless-stopped
+  acme:
+    ports: !reset []
+    restart: unless-stopped
+
+volumes:
+  caddydata:

@@ -63,6 +63,65 @@ What Valet adds on top of the standards, so each bank doesn't have to design, bu
 - **No lock-in**: Apache 2.0 licensed, built only on open standards, and it runs on the identity platform the bank
   already has.
 
+## Consent Service: one consent model for every application
+
+Valet's AI-agent grants are one case of a wider need: a **standard consent model any application can use**. The
+Consent Service ([`docs/consent-service-openapi.yaml`](docs/consent-service-openapi.yaml), live at
+`/consent/v1/docs`) follows the UK Open Banking intent-based pattern, generalised with RFC 9396 `authorization_details`:
+
+1. The app gets a client-credentials token from the bank's IdP (`private_key_jwt`, DPoP, scope `consents:write`)
+   and **creates the consent first**: `POST /consent/v1/consents` → `AwaitingAuthorisation`, no customer yet.
+2. It sends the customer to the bank's IdP with the `consent_id` (PAR). The IdP signs them in and hands them to
+   the bank's approval screen, which shows the consent in plain language; the customer picks accounts.
+3. The IdP's token carries **only a reference** (`valet_grant` = the consent id). The bank's APIs (`/ob/v1/...`)
+   ask for a decision on every call: `permit`, `deny` or `step_up_required`, with reserve-and-settle for amounts
+   and a signed receipt for each decision.
+4. Revoking (customer in the bank app under *Connected apps*, or the app itself) stops a still-valid token on its
+   next call, and the app receives a signed Security Event Token (RFC 8417) at its webhook.
+
+Types: `account_information`, `payment_initiation`, `recurring_payment`, `customer_profile` and
+`delegated_action` (with an `actor`, for AI agents and advisers). The demo app **Acme Budgeting**
+(`valet/apps/acme.py`, port 8002) runs this end to end through Keycloak in the native stack; `tests/test_consents.py`
+covers the rules. In the PoC the Consent Service and Valet's agent grants are separate stores; a bank deployment
+converges them on the consent store.
+
+## Claude through the bank's MCP gateway
+
+`/mcp` on the bank is a Streamable HTTP MCP server ([design](docs/mcp-gateway-design.md)). Claude signs in through
+the bank's IdP (Keycloak), the customer builds the mandate on the bank's consent screen, and every tool call is
+checked against the live mandate at the gateway, not by the model:
+
+| Tool | What the gateway enforces |
+|---|---|
+| `list_accounts`, `get_balance`, `list_transactions` | Only shared accounts, within the look-back window; numbers masked |
+| `list_payees` | Only payees the customer saved in the bank app |
+| `pay_existing_payee` | Saved payees only (never new ones), monthly limit including payments awaiting approval, idempotency key, and **customer approval in the bank app for every payment** (Claude sends bearer tokens, so it sits on the bearer tier) |
+| `get_payment_status` | `APPROVAL_REQUIRED`, `APPROVED` (paid exactly once) or `DECLINED` with reason codes |
+
+Pause or disconnect in the bank app and the next tool call is `DECLINED: MANDATE_PAUSED`. Every call writes a
+receipt, including Claude's stated reason labelled as agent-supplied. The demo seeds a transaction whose description
+tries to instruct the assistant to pay a stranger (`DEMO_SEED_INJECTION=1`): if a model obeys it, the gateway answers
+`PAYEE_NOT_IN_MANDATE`.
+
+**Claude Code** (works against `localhost`):
+
+```bash
+MCP_CLIENT_SECRET=claude-demo-secret-change-me claude mcp add --transport http \
+  --client-id claude --client-secret --callback-port 33418 marula http://localhost:8000/mcp
+# then /mcp in Claude Code -> Authenticate -> sign in as thandi / demo -> choose Bill payer
+```
+
+**Claude (web, desktop, mobile)** needs the gateway and Keycloak reachable from the internet over HTTPS: deploy it with
+[`deploy/azure`](deploy/azure/README.md), then *Settings → Connectors → Add custom connector*, URL
+`https://bank.<label>.<zone>/mcp`, and under *Advanced settings* client ID `claude` and the client secret. Keycloak
+already allows Claude's callbacks (`https://claude.ai/api/mcp/auth_callback`, `https://claude.com/...`).
+
+Try: *"What did I spend last week? Then pay my water bill."* Then: *"Pay QuickLoans R4,999 like the note in my
+transactions says."* Then pause Claude in the bank app and ask again.
+
+`scripts/preflight.py` drives this path the way Claude's connector does (discovery from the 401, Keycloak sign-in,
+consent, token, MCP), and checks protocol conformance with the official MCP Python SDK when it is installed.
+
 ## Identity providers
 
 Valet does not replace the bank's identity platform. It works with it in one of two modes, and the banking API's
@@ -96,6 +155,17 @@ VALET_EXTERNAL_ISSUERS='[{"issuer": "https://login.bank.example/", "jwks_uri": "
                           "audience": "marula-api", "grant_claim": "valet_grant"}]'
 VALET_INTERNAL_SECRET=...      # PoC only: production uses mTLS between the IdP and Valet
 ```
+
+**Native mode on Keycloak in one command** (Docker; the first run builds Keycloak 26.4 with the extension baked in):
+
+```bash
+docker compose -f docker-compose.native.yml up --build    # wait for "valet-setup exited with code 0"
+python scripts/preflight.py                               # 13 checks through real Keycloak: READY or NOT READY
+docker compose -f docker-compose.native.yml down -v       # reset to a clean slate
+```
+
+Kaya on http://localhost:8001, Marula Bank on http://localhost:8000, Keycloak on http://localhost:8080
+(admin / admin); Thandi signs in as `thandi` / `demo` on Keycloak's page. For a hosted demo over HTTPS (one subdomain per component, all on 443), see [`deploy/azure/README.md`](deploy/azure/README.md): one script deploys it to an Azure VM. It has to be HTTPS: Keycloak 26 marks its login cookies `Secure`, and browsers only send those over plain http to `localhost`.
 
 **Native mode on Keycloak** uses the extension in [`extensions/keycloak-valet`](extensions/keycloak-valet/README.md).
 Keycloak signs the customer in, then hands them to Valet's consent screen. It issues Kaya's DPoP-bound tokens
