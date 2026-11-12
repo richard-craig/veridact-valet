@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block title %}Approve access · {{ bank_name }}{% endblock %}
 {% block body %}
 <h1>{{ client.name }} wants access</h1>
-<div class="card agentrow"><span class="av" style="background:var(--green)">{{ client.name[0] }}</span><div><b>{{ client.name }}</b><div class="sub">{{ client.legal_entity }}</div>
+<div class="card agentrow"><span class="av" style="background:var(--brand)">{{ client.name[0] }}</span><div><b>{{ client.name }}</b><div class="sub">{{ client.legal_entity }}</div>
 {% if consent.actor %}<div class="sub">Acting through <b>{{ consent.actor.display_name or consent.actor.id }}</b> ({{ consent.actor.type|replace('_', ' ') }})</div>{% endif %}</div></div>
 <div class="card"><b>What you are agreeing to</b><p style="margin:6px 0 0">{{ summary }}</p></div>
 <form method="post" action="/handoff/decision" style="display:flex;flex-direction:column;gap:10px">
