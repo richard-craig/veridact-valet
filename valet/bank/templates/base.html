@@ -6,32 +6,32 @@
 <title>{% block title %}{{ bank_name }}{% endblock %}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap">
 <style>
-:root{--ink:#15211B;--muted:#55625B;--line:#DCE3DE;--green:#2E6B4A;--green-d:#1F4D35;--mint:#EEF6F1;--bg:#F3F6F4;--amber:#8A4B08;--amber-bg:#FBF0DD;--red:#B23A26;--red-bg:#FDF3F1;--blue:#1D4FD8;--agent:#4B3BC9}
+:root{--ink:#131B2E;--muted:#56607A;--line:#DCE2EC;--brand:#1E4FA8;--brand-d:#163B80;--tint:#EEF3FC;--bg:#F3F5F9;--amber:#8A4B08;--amber-bg:#FBF0DD;--red:#B23A26;--red-bg:#FDF3F1;--blue:#4B3BC9;--agent:#4B3BC9}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Manrope,system-ui,sans-serif;font-size:15px;line-height:1.5}
 .wrap{max-width:440px;margin:0 auto;min-height:100vh;background:#fff;padding:20px 20px 32px;display:flex;flex-direction:column;gap:14px}
-.top{display:flex;align-items:center;gap:10px}.logo{width:32px;height:32px;border-radius:9px;background:var(--green);color:#fff;display:grid;place-items:center;font-weight:800}
+.top{display:flex;align-items:center;gap:10px}.logo{width:32px;height:32px;border-radius:9px;background:var(--brand);color:#fff;display:grid;place-items:center;font-weight:800}
 .top b{font-size:17px;flex:1}.top form{margin:0}
 h1{margin:0;font-size:24px;line-height:1.2}h2{margin:8px 0 0;font-size:16px}
 .card{border:1px solid var(--line);border-radius:16px;padding:14px;background:#fff}
 .agentrow{display:flex;align-items:center;gap:12px}.av{width:44px;height:44px;border-radius:12px;background:var(--agent);display:grid;place-items:center;color:#fff;font-weight:800;flex:none}
 .sub{font-size:13px;color:var(--muted)}.ver{font-size:13px;font-weight:700;color:var(--blue)}.unver{font-size:13px;font-weight:700;color:var(--red)}
-.btn{display:block;width:100%;text-align:center;font:inherit;font-weight:700;font-size:16px;border-radius:14px;padding:14px;border:0;background:var(--green);color:#fff;cursor:pointer;text-decoration:none}
-.btn:hover{background:var(--green-d)}.btn.ghost{background:#fff;color:var(--ink);border:1px solid #B9C4BE}.btn.danger{background:var(--red)}.btn.ghost.danger{background:#fff;color:var(--red);border-color:#E4B8AF}
-.linkbtn{background:none;border:0;font:inherit;color:var(--green);font-weight:700;cursor:pointer;padding:0}
+.btn{display:block;width:100%;text-align:center;font:inherit;font-weight:700;font-size:16px;border-radius:14px;padding:14px;border:0;background:var(--brand);color:#fff;cursor:pointer;text-decoration:none}
+.btn:hover{background:var(--brand-d)}.btn.ghost{background:#fff;color:var(--ink);border:1px solid #B8C2D4}.btn.danger{background:var(--red)}.btn.ghost.danger{background:#fff;color:var(--red);border-color:#E4B8AF}
+.linkbtn{background:none;border:0;font:inherit;color:var(--brand);font-weight:700;cursor:pointer;padding:0}
 .opt{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:14px;padding:12px 14px;cursor:pointer}
-.opt:has(input:checked){border:2px solid var(--green);background:var(--mint)}.opt input{margin-top:4px;accent-color:var(--green)}
+.opt:has(input:checked){border:2px solid var(--brand);background:var(--tint)}.opt input{margin-top:4px;accent-color:var(--brand)}
 .never{background:#FBF5E6;border-radius:14px;padding:12px 14px;font-size:13px}
 .pill{font-size:12px;font-weight:700;border-radius:99px;padding:4px 10px;white-space:nowrap}
-.pill.active{color:#1F6B43;background:#E3F2EA}.pill.paused{color:var(--amber);background:var(--amber-bg)}.pill.expired,.pill.revoked{color:var(--red);background:var(--red-bg)}
-.meter{height:8px;border-radius:4px;background:#E3E9E5;overflow:hidden}.meter i{display:block;height:100%;background:var(--green)}
+.pill.active{color:#163B80;background:#E3ECFA}.pill.paused{color:var(--amber);background:var(--amber-bg)}.pill.expired,.pill.revoked{color:var(--red);background:var(--red-bg)}
+.meter{height:8px;border-radius:4px;background:#E3E8F0;overflow:hidden}.meter i{display:block;height:100%;background:var(--brand)}
 .banner{background:var(--amber-bg);color:var(--amber);border-radius:14px;padding:12px 14px;font-weight:700;text-decoration:none;display:block}
-.list{border:1px solid var(--line);border-radius:16px;overflow:hidden}.item{display:flex;gap:12px;padding:12px 14px;border-bottom:1px solid #E8EDEA}.item:last-child{border-bottom:0}
-.dot{width:10px;height:10px;border-radius:50%;margin-top:6px;flex:none}.ok .dot{background:var(--green)}.approved .dot{background:#D9822B}.held .dot{background:#D9822B}.blocked .dot{background:var(--red)}.info .dot{background:#8A968F}
+.list{border:1px solid var(--line);border-radius:16px;overflow:hidden}.item{display:flex;gap:12px;padding:12px 14px;border-bottom:1px solid #E8ECF3}.item:last-child{border-bottom:0}
+.dot{width:10px;height:10px;border-radius:50%;margin-top:6px;flex:none}.ok .dot{background:var(--brand)}.approved .dot{background:#D9822B}.held .dot{background:#D9822B}.blocked .dot{background:var(--red)}.info .dot{background:#8A93A6}
 .item.blocked{background:var(--red-bg)}.item b{font-size:14px}.mono{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted)}
 .row{display:flex;justify-content:space-between;gap:12px;font-size:14px}.row span:first-child{color:var(--muted)}.row span:last-child{font-weight:700;text-align:right}
-.warn{display:flex;gap:10px;font-size:13px;color:#33413A}.amount{font-size:44px;font-weight:800;letter-spacing:-1px}
+.warn{display:flex;gap:10px;font-size:13px;color:#333D52}.amount{font-size:44px;font-weight:800;letter-spacing:-1px}
 .tag{align-self:flex-start;font-size:13px;font-weight:700;color:var(--amber);background:var(--amber-bg);border-radius:8px;padding:4px 8px}
-input[type=text],input[type=password],select{font:inherit;padding:12px;border:1px solid #B9C4BE;border-radius:12px;width:100%}
+input[type=text],input[type=password],select{font:inherit;padding:12px;border:1px solid #B8C2D4;border-radius:12px;width:100%}
 label.f{display:flex;flex-direction:column;gap:6px;font-weight:600;font-size:14px}.err{color:var(--red);font-weight:700}
 .note{font-size:12px;color:var(--muted);text-align:center}
 </style>
