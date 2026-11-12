@@ -4,7 +4,7 @@
 <a class="sub" href="/app">← AI agents</a>
 {% for c in items %}
 <div class="card" style="display:flex;flex-direction:column;gap:8px">
-<div class="agentrow"><span class="av" style="background:var(--green)">{{ c.client_display.name[0] }}</span><div style="flex:1"><b>{{ c.client_display.name }}</b><div class="sub">{{ c.purpose.code|replace('_', ' ')|capitalize }}</div></div>
+<div class="agentrow"><span class="av" style="background:var(--brand)">{{ c.client_display.name[0] }}</span><div style="flex:1"><b>{{ c.client_display.name }}</b><div class="sub">{{ c.purpose.code|replace('_', ' ')|capitalize }}</div></div>
 <span class="pill {{ 'active' if c.status == 'Authorised' else ('paused' if c.status == 'Suspended' else 'revoked') }}">{{ 'Active' if c.status == 'Authorised' else c.status }}</span></div>
 <div>{{ c.plain_language_summary }}</div>
 <div class="mono">{{ c.consent_id }} · last used {{ c.last_used_at or 'never' }}</div>
