@@ -1,0 +1,25 @@
+{% extends "base.html" %}{% block title %}Review {{ agent.name }} · {{ bank_name }}{% endblock %}
+{% block body %}
+<h1>Review {{ agent.name }}'s access</h1>
+<div class="card agentrow"><span class="av">{{ agent.name[0] }}</span><div style="flex:1"><b>{{ agent.name }}</b><div class="sub">{{ agent.operator }}</div>
+{% if agent.platform %}<div class="sub">Connects through the bank's MCP gateway</div>{% elif agent.verified %}<div class="ver">✓ Verified by Veridact</div>{% else %}<div class="unver">Not verified</div>{% endif %}</div>
+<span class="pill {{ g.status }}">{{ g.status|capitalize }}</span></div>
+<p class="sub" style="margin:0">{{ agent.name }} asked to connect again. You already allow it the access below: keep it, change it, or stop it.</p>
+<div class="card" style="display:flex;flex-direction:column;gap:6px">
+<b>{{ level_title }}</b>
+<div style="font-size:13px">{{ summary }}</div>
+<div class="sub">Connected {{ connected }} · last confirmed {{ confirmed }} · ends in {{ days_left }} days{% if g.level == 'bill_payer' %} · paid {{ spent }} this month{% endif %}</div>
+</div>
+{% if wants_more %}<div class="banner">{{ agent.name }} is asking for more: {{ wants_more }}. Keeping gives it only what you allowed before. Choose Change to decide.</div>{% endif %}
+{% if g.status == 'paused' %}<div class="banner">{{ agent.name }} is paused. Keeping leaves it paused; resume it under AI agents.</div>{% endif %}
+<form method="post" action="/handoff/decision" style="display:flex;flex-direction:column;gap:10px">
+<input type="hidden" name="ticket" value="{{ ticket }}">
+<button class="btn" type="submit" name="decision" value="keep">Keep as it is</button>
+<button class="btn danger" type="submit" name="decision" value="stop">Stop {{ agent.name }}</button>
+</form>
+<form method="get" action="/handoff/consent" style="display:flex;flex-direction:column">
+<input type="hidden" name="ticket" value="{{ ticket }}"><input type="hidden" name="change" value="1">
+<button class="btn ghost" type="submit">Change what {{ agent.name }} can do</button>
+</form>
+<p class="note">Changing replaces this access with your new choice. Stopping disconnects {{ agent.name }} straight away.</p>
+{% endblock %}

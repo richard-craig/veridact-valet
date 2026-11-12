@@ -147,3 +147,113 @@ def test_idp_tokens_bind_the_grant_to_the_agents_key_and_idp_revoke_ends_it():
         r = await h.browser.delete(f"/internal/grants/{gid}", headers={"Authorization": "Bearer " + "i" * 32})
         assert r.json()["status"] == "revoked"
     run(t())
+
+
+# ------------------------------------------------- Review: signing in again for an agent the customer already allows
+async def connected(h: Harness, level: str = "bill_payer") -> dict:
+    res = result_of((await decide(h, ticket(), level=level)).text)
+    return h.bank.store.grant(res["grant_id"])
+
+
+def live(h: Harness) -> list:
+    return h.bank.store.q("SELECT id FROM grants WHERE client_id='kaya' AND status IN ('active','paused')")
+
+
+def test_reconnecting_shows_the_review_screen_not_a_new_consent():
+    async def t():
+        h = harness()
+        g = await connected(h)
+        page = await h.browser.get("/handoff/consent", params={"ticket": ticket()})
+        assert page.status_code == 200 and "Review Kaya" in page.text and "Keep as it is" in page.text
+        assert 'name="level"' not in page.text                      # not the full consent form
+        assert "Bill payer" in page.text and "last confirmed" in page.text and g["id"] not in page.text
+    run(t())
+
+
+def test_keep_returns_the_same_grant_and_records_the_confirmation():
+    async def t():
+        h = harness()
+        g = await connected(h)
+        h.bank.store.x("UPDATE grants SET confirmed_at=? WHERE id=?", g["created"] - 86400, g["id"])
+        res = result_of((await h.browser.post("/handoff/decision", data={"ticket": ticket(), "decision": "keep"})).text)
+        assert res["decision"] == "allow" and res["grant_id"] == g["id"]
+        kept = h.bank.store.grant(g["id"])
+        assert kept["status"] == "active" and kept["confirmed_at"] > g["created"] - 1
+        assert kept["details"] == g["details"] and kept["consent_hash"] == g["consent_hash"]   # terms unchanged
+        assert len(live(h)) == 1
+        assert [r["action"] for r in h.bank.receipts.for_grant(g["id"])][:2] == ["reconfirm", "connect"]
+    run(t())
+
+
+def test_stop_revokes_and_the_agent_gets_access_denied():
+    async def t():
+        h = harness()
+        g = await connected(h)
+        res = result_of((await h.browser.post("/handoff/decision", data={"ticket": ticket(), "decision": "stop"})).text)
+        assert res["decision"] == "deny" and "grant_id" not in res
+        assert h.bank.store.grant(g["id"])["status"] == "revoked" and not live(h)
+        # the next connect is a fresh consent, not a review
+        page = await h.browser.get("/handoff/consent", params={"ticket": ticket()})
+        assert 'name="level"' in page.text
+    run(t())
+
+
+def test_change_starts_from_todays_choice_and_replaces_the_old_grant():
+    async def t():
+        h = harness()
+        old = await connected(h, level="view_only")
+        tk = ticket(requested_level="bill_payer")
+        page = await h.browser.get("/handoff/consent", params={"ticket": tk, "change": "1"})
+        assert 'value="view_only" checked' in page.text             # what the customer allows today, not the ask
+        res = result_of((await decide(h, tk, level="bill_payer")).text)
+        assert res["grant_id"] != old["id"] and h.bank.store.grant(res["grant_id"])["level"] == "bill_payer"
+        assert h.bank.store.grant(old["id"])["status"] == "revoked" and len(live(h)) == 1
+    run(t())
+
+
+def test_review_says_when_the_agent_asks_for_more_and_keep_does_not_give_it():
+    async def t():
+        h = harness()
+        g = await connected(h, level="view_only")
+        tk = ticket(requested_level="bill_payer")
+        page = await h.browser.get("/handoff/consent", params={"ticket": tk})
+        assert "asking for more: Bill payer" in page.text
+        res = result_of((await h.browser.post("/handoff/decision", data={"ticket": tk, "decision": "keep"})).text)
+        assert res["grant_id"] == g["id"] and h.bank.store.grant(g["id"])["level"] == "view_only"
+    run(t())
+
+
+def test_keeping_a_paused_agent_leaves_it_paused():
+    async def t():
+        h = harness()
+        g = await connected(h)
+        h.bank.store.set_status(g["id"], "paused")
+        page = await h.browser.get("/handoff/consent", params={"ticket": ticket()})
+        assert "Keeping leaves it paused" in page.text
+        res = result_of((await h.browser.post("/handoff/decision", data={"ticket": ticket(), "decision": "keep"})).text)
+        assert res["grant_id"] == g["id"] and h.bank.store.grant(g["id"])["status"] == "paused"
+    run(t())
+
+
+def test_keep_or_stop_without_a_live_grant_is_refused():
+    async def t():
+        h = harness()
+        for choice in ("keep", "stop"):
+            r = await h.browser.post("/handoff/decision", data={"ticket": ticket(), "decision": choice})
+            assert r.status_code == 400 and "no connection" in r.text
+        assert not h.bank.store.q("SELECT 1 FROM grants")
+    run(t())
+
+
+def test_a_database_from_before_review_gets_confirmed_at(tmp_path):
+    import sqlite3
+
+    from valet.bank.store import Store
+    db = tmp_path / "old.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE grants (id TEXT PRIMARY KEY, customer TEXT, client_id TEXT, level TEXT, details TEXT, "
+                "status TEXT, created REAL, expires REAL, jkt TEXT, consent_hash TEXT, sub TEXT)")
+    con.execute("INSERT INTO grants VALUES ('g1','cus_thandi','kaya','view_only','[]','active',100,9e9,NULL,'h','s')")
+    con.commit()
+    con.close()
+    assert Store(str(db)).one("SELECT confirmed_at FROM grants WHERE id='g1'")["confirmed_at"] == 100

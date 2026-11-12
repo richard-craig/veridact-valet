@@ -43,13 +43,32 @@ def create_grant(bank: Bank, customer: dict[str, Any], agent: AgentRecord, level
     consent_hash = digest({"summary": summary, "agent": agent.name, "operator": agent.operator,
                            "client_id": agent.client_id})
     gid, now = random_id("g", 12), time.time()
-    store.x("INSERT INTO grants VALUES (?,?,?,?,?,?,?,?,?,?,?)", gid, customer["id"], agent.client_id, level,
+    store.x("INSERT INTO grants (id, customer, client_id, level, details, status, created, expires, jkt, consent_hash, "
+            "sub, confirmed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", gid, customer["id"], agent.client_id, level,
             json.dumps(details), "active", now, now + cfg.max_grant_days * 86400, None, consent_hash,
-            sha256_b64u(customer["id"] + agent.client_id)[:22])
+            sha256_b64u(customer["id"] + agent.client_id)[:22], now)
     bank.receipts.append(grant_id=gid, agent=agent.client_id, customer=customer["id"], action="connect",
                          outcome="allowed", basis="consent", detail={"summary": summary, "via": via},
                          consent_hash=consent_hash)
     return store.grant(gid)
+
+
+def keep_grant(bank: Bank, g: dict[str, Any], via: str) -> dict[str, Any]:
+    """The customer reviewed this mandate and kept it as it is: same grant, same terms, a fresh confirmation time.
+    Nothing about what the agent may do changes, so no new consent is recorded; the receipt says who kept it."""
+    now = time.time()
+    bank.store.x("UPDATE grants SET confirmed_at=? WHERE id=?", now, g["id"])
+    bank.receipts.append(grant_id=g["id"], agent=g["client_id"], customer=g["customer"], action="reconfirm",
+                         outcome="done", basis="customer", detail={"via": via, "status": g["status"]},
+                         consent_hash=g["consent_hash"])
+    return bank.store.grant(g["id"])
+
+
+def end_grant(bank: Bank, g: dict[str, Any], reason: str) -> None:
+    """Revoke a mandate the customer stopped or replaced at review."""
+    bank.store.set_status(g["id"], "revoked")
+    bank.receipts.append(grant_id=g["id"], agent=g["client_id"], customer=g["customer"], action="revoke",
+                         outcome="done", basis="customer", reason=reason)
 
 
 def router(bank: Bank) -> APIRouter:

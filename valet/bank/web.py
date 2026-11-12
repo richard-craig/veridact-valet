@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -21,6 +22,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..common.money import rand, to_cents
 from . import levels as L
+from .config import SAST
 from .idp import SignInError
 
 COOKIE = "marula_session"
@@ -96,9 +98,11 @@ def describe(rec: dict[str, Any]) -> dict[str, str]:
         return {"title": f"Asked you to approve {to}{amt}", "sub": "Sent to your Marula app", "kind": "held"}
     if a == "approval_decision":
         return {"title": f"You {rec.get('outcome')} {to}{amt}", "sub": "In your Marula app", "kind": "info"}
+    if a == "reconfirm":
+        return {"title": "Kept by you", "sub": "Reviewed after signing in again", "kind": "info"}
     if a in ("pause", "resume", "revoke", "pause_all"):
         words = {"pause": "Paused", "resume": "Resumed", "revoke": "Disconnected", "pause_all": "Paused (pause all)"}
-        return {"title": f"{words[a]} by you", "sub": "", "kind": "info"}
+        return {"title": f"{words[a]} by you", "sub": (rec.get("reason") or "").capitalize(), "kind": "info"}
     if a == "read_balances" and o == "allowed":
         return {"title": "Checked balances", "sub": "Within your limit", "kind": "ok"}
     if a == "read_transactions" and o == "allowed":
@@ -127,13 +131,15 @@ def router(bank) -> APIRouter:
         rec = bank.registry.lookup(g["client_id"])
         limit = L.monthly_limit(g["details"])
         recs = bank.receipts.for_grant(g["id"])
-        last = next((x for x in recs if x["action"] not in ("connect",)), recs[-1] if recs else None)
+        last = next((x for x in recs if x["action"] not in ("connect", "reconfirm")), recs[-1] if recs else None)
+        confirmed = datetime.fromtimestamp(g.get("confirmed_at") or g["created"], SAST)
         pend = store.q("SELECT id FROM approvals WHERE grant_id=? AND status='pending' AND expires>?", g["id"], time.time())
         return {**g, "agent": rec, "level_title": L.LEVELS[g["level"]]["title"],
                 "spent": rand(store.spent(g["id"])), "limit": rand(limit) if limit else None,
                 "pct": min(100, round(100 * store.spent(g["id"]) / limit)) if limit else 0,
                 "days_left": max(0, int((g["expires"] - time.time()) // 86400)),
                 "last": describe(last) if last else None, "pending": len(pend),
+                "confirmed": f"{confirmed.day} {confirmed:%B %Y}",
                 "trusted": bank.registry.is_trusted(g["client_id"])}
 
     @r.get("/")

@@ -6,6 +6,10 @@ Consent hand-off: the bank's IdP signs the customer in, Valet shows the consent 
     Valet --auto-POST valet_result=...--> IdP (back into the same login)               (result signed by Valet)
     IdP issues the agent's DPoP-bound token with valet_grant=<grant id>
 
+If the customer already allows this agent (an active or paused grant), Valet shows a review instead of a new consent:
+Keep returns the same grant id (terms unchanged, confirmed_at refreshed, a reconfirm receipt), Change runs the consent
+screen and replaces the old grant, Stop revokes it and the agent gets access_denied.
+
 Why hand off rather than let the IdP draw its own consent screen: every IdP then shows the same screen, the customer
 can choose less than the agent asked for (Auth0 Actions, for one, cannot change authorization_details), and the
 grant is created where its rules live.
@@ -16,6 +20,7 @@ a bank would use asymmetric keys (each side verifying the other via JWKS).
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -26,10 +31,16 @@ from fastapi.responses import HTMLResponse
 from ..common.money import rand
 from . import levels as L
 from .context import Bank
-from .grants import create_grant
+from .config import SAST
+from .grants import create_grant, end_grant, keep_grant
 from .web import render
 
 HANDOFF_ALG = "HS256"
+
+
+def day(ts: float) -> str:
+    d = datetime.fromtimestamp(ts, SAST)
+    return f"{d.day} {d:%B %Y}"
 
 
 class HandoffError(Exception):
@@ -120,8 +131,22 @@ def router(bank: Bank) -> APIRouter:
         svc.authorise(c, cus["id"], resources)
         return {"decision": "allow", "grant_id": c["id"]}
 
+    # ---------------------------------------------- Review: the customer signs in again for an agent they already allow
+    def review_screen(request: Request, ticket: str, t: dict[str, Any], cus: dict[str, Any], agent: Any,
+                      g: dict[str, Any]) -> HTMLResponse:
+        acct = store.one("SELECT * FROM accounts WHERE id=?", L.find(g["details"], "valet_accounts")["accounts"][0])
+        asked = t.get("requested_level")
+        wants_more = asked in L.LEVELS and list(L.LEVELS).index(asked) > list(L.LEVELS).index(g["level"])
+        return render(request, "review.html", bank, customer=cus, agent=agent, g=g, ticket=ticket,
+                      level_title=L.LEVELS[g["level"]]["title"],
+                      summary=L.plain_summary(g["level"], g["details"], f"{acct['name']} {acct['number']}",
+                                              cfg.max_grant_days),
+                      connected=day(g["created"]), confirmed=day(g.get("confirmed_at") or g["created"]),
+                      days_left=max(0, int((g["expires"] - time.time()) // 86400)),
+                      spent=rand(store.spent(g["id"])), wants_more=L.LEVELS[asked]["title"] if wants_more else "")
+
     @r.get("/consent", response_class=HTMLResponse)
-    def consent(request: Request, ticket: str = ""):
+    def consent(request: Request, ticket: str = "", change: str = ""):
         try:
             t = read_ticket(ticket)
             if t.get("consent_id"):
@@ -129,7 +154,12 @@ def router(bank: Bank) -> APIRouter:
             cus, agent = context(t)
         except HandoffError as e:
             return error_page(request, str(e))
+        current = store.current_grant(cus["id"], agent.client_id)
+        if current and change != "1":
+            return review_screen(request, ticket, t, cus, agent, current)
         level = t.get("requested_level") if t.get("requested_level") in L.LEVELS else "view_only"
+        if current:                                   # Change: start from what the customer allows today
+            level = current["level"]
         accounts = store.q("SELECT * FROM accounts WHERE customer=?", cus["id"])
         return render(request, "consent.html", bank, customer=cus, agent=agent, client_id=agent.client_id,
                       action="/handoff/decision", hidden={"ticket": ticket}, preselect=level, levels=L.LEVELS,
@@ -152,18 +182,31 @@ def router(bank: Bank) -> APIRouter:
             return error_page(request, "This request has already been answered.")
         now = int(time.time())
         result: dict[str, Any] = {"iss": cfg.issuer, "aud": t["iss"], "iat": now, "exp": now + 120, "nonce": t["nonce"]}
+        choice = str(form.get("decision", ""))
+        current = None if t.get("consent_id") else store.current_grant(cus["id"], agent.client_id)
         if t.get("consent_id"):
             try:
                 result |= consent_decision(form, t)
             except HandoffError as e:
                 return error_page(request, str(e))
-        elif form.get("decision") == "allow":
+        elif choice == "keep" and current:
+            # Same grant id back to the IdP: the agent's new tokens carry the mandate the customer just reviewed.
+            keep_grant(bank, current, via="bank identity provider (review after sign-in)")
+            result |= {"decision": "allow", "grant_id": current["id"]}
+        elif choice == "stop" and current:
+            end_grant(bank, current, reason="stopped when asked to review")
+            result |= {"decision": "deny"}
+        elif choice == "allow":
             try:
                 g = create_grant(bank, cus, agent, str(form.get("level", "view_only")), str(form.get("account", "")),
                                  int(form.get("monthly") or 2_000_00), via="bank identity provider (consent hand-off)")
             except ValueError as e:
                 return error_page(request, f"That choice isn't possible: {e}.")
+            if current:                                # one live mandate per agent: the new choice replaces the old
+                end_grant(bank, current, reason=f"replaced by your new choice ({g['id']})")
             result |= {"decision": "allow", "grant_id": g["id"]}
+        elif choice in ("keep", "stop"):
+            return error_page(request, f"There is no connection to {agent.name} to review any more.")
         else:
             result |= {"decision": "deny"}
         token = jwt.encode(result, cfg.handoff_secret, algorithm=HANDOFF_ALG)

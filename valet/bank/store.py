@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, a
     amount INTEGER, by_agent TEXT);
 CREATE TABLE IF NOT EXISTS par (request_uri TEXT PRIMARY KEY, client_id TEXT, params TEXT, expires REAL, used INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, customer TEXT, client_id TEXT, level TEXT, details TEXT,
-    status TEXT, created REAL, expires REAL, jkt TEXT, consent_hash TEXT, sub TEXT);
+    status TEXT, created REAL, expires REAL, jkt TEXT, consent_hash TEXT, sub TEXT, confirmed_at REAL);
 CREATE TABLE IF NOT EXISTS codes (code TEXT PRIMARY KEY, grant_id TEXT, client_id TEXT, redirect_uri TEXT,
     challenge TEXT, expires REAL, used INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS refresh (hash TEXT PRIMARY KEY, grant_id TEXT, jkt TEXT, used INTEGER DEFAULT 0, created REAL);
@@ -52,6 +52,9 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         self.db.executescript(SCHEMA)
+        if "confirmed_at" not in {c["name"] for c in self.q("PRAGMA table_info(grants)")}:   # databases from before review
+            self.x("ALTER TABLE grants ADD COLUMN confirmed_at REAL")
+            self.x("UPDATE grants SET confirmed_at=created")
 
     # ------------------------------------------------------------- basics
     def q(self, sql: str, *args: Any) -> list[sqlite3.Row]:
@@ -136,6 +139,15 @@ class Store:
             self.x("UPDATE grants SET status='expired' WHERE id=?", grant_id)
             g["status"] = "expired"
         return g
+
+    def current_grant(self, customer: str, client_id: str) -> dict[str, Any] | None:
+        """The customer's live mandate for this agent (active or paused), if any: what a reconnect asks them to review."""
+        for r in self.q("SELECT id FROM grants WHERE customer=? AND client_id=? AND status IN ('active','paused') "
+                        "ORDER BY created DESC", customer, client_id):
+            g = self.grant(r["id"])
+            if g and g["status"] in ("active", "paused"):
+                return g
+        return None
 
     def grants_for(self, customer: str) -> list[dict[str, Any]]:
         return [self.grant(r["id"]) for r in self.q("SELECT id FROM grants WHERE customer=? ORDER BY created DESC", customer)]

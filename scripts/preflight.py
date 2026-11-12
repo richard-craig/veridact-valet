@@ -110,7 +110,7 @@ class Browser:
                 r = httpx.Response(200, request=httpx.Request("GET", url))
                 r.final_url = url  # type: ignore[attr-defined]
                 return r
-            r = self.c.request(method, url, data=data)
+            r = self.c.request(method, url, params=data) if method == "GET" else self.c.request(method, url, data=data)
             if r.status_code in (301, 302, 303, 307):
                 url, method, data = urljoin(url, r.headers["location"]), ("GET" if r.status_code != 307 else method), \
                     (None if r.status_code != 307 else data)
@@ -254,6 +254,8 @@ def mcp_gateway(b: Browser) -> None:
          "state": "st-1", "code_challenge": challenge, "code_challenge_method": "S256", "resource": mcp_url}
     r = b.keycloak_login_if_asked(b.go("GET", meta["authorization_endpoint"] + "?" + httpx.QueryParams(q).__str__(),
                                        stop_at=CLAUDE_CALLBACK))
+    if "Keep as it is" in r.text:                     # Claude is still connected from an earlier run: change, not keep
+        r = b.submit(r, lambda f: f["action"].endswith("/handoff/consent"))
     check("Claude's sign-in reaches the bank's consent screen, with the approve-every-payment rule",
           "/handoff/consent" in r.final_url and "You approve every payment Claude asks for" in r.text,  # type: ignore[attr-defined]
           r.final_url.split("?")[0])  # type: ignore[attr-defined]
@@ -363,6 +365,8 @@ def main() -> int:
     r = b.keycloak_login_if_asked(r)
     check("Keycloak hands Thandi to Valet's consent screen", "/handoff/consent" in r.final_url,  # type: ignore[attr-defined]
           r.final_url.split("?")[0])  # type: ignore[attr-defined]
+    if "Keep as it is" in r.text:                     # Kaya is still connected from an earlier run: change, not keep
+        r = b.submit(r, lambda f: f["action"].endswith("/handoff/consent"))
     r = b.submit(r, lambda f: "/handoff/decision" in f["action"], button=("decision", "allow"), level="bill_payer",
                  monthly="200000")
     r = b.submit(r, lambda f: "valet_result" in f["fields"])          # the auto-POST back into the Keycloak login
@@ -411,6 +415,19 @@ def main() -> int:
         b.submit(r, lambda f: f["action"].endswith("/resume"))
         b.go("POST", KAYA + "/do/balance")
         check("Resume restores access", kaya_last(b).startswith("Your balances"), kaya_last(b))
+
+        # 6b. Kaya connects again: the customer reviews the mandate and keeps it, no new consent
+        r = b.keycloak_login_if_asked(b.go("POST", KAYA + "/connect"))
+        check("Reconnecting shows the review screen, not a new consent",
+              "/handoff/consent" in r.final_url and "Keep as it is" in r.text and 'name="level"' not in r.text)  # type: ignore[attr-defined]
+        r = b.submit(r, lambda f: "/handoff/decision" in f["action"], button=("decision", "keep"))
+        r = b.submit(r, lambda f: "valet_result" in f["fields"])
+        b.go("POST", KAYA + "/do/balance")
+        r = b.go("GET", BANK + "/app")
+        same = re.findall(r'/app/agents/([A-Za-z0-9_\-]+)"', r.text) == gids
+        page = b.go("GET", f"{BANK}/app/agents/{gid}").text
+        check("Keep reuses the same mandate: Kaya still works, no second connection",
+              same and kaya_last(b).startswith("Your balances") and "Kept by you" in page, kaya_last(b))
 
     # 7. Consent Service: a third-party app, Open Banking style, through the same Keycloak
     consent_service(b)

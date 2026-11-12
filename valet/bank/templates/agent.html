@@ -2,7 +2,7 @@
 {% block body %}
 <a href="/app" style="color:var(--green);font-weight:700;text-decoration:none">← AI agents</a>
 <div class="agentrow"><span class="av">{{ g.agent.name[0] }}</span><div style="flex:1"><b style="font-size:20px">{{ g.agent.name }}</b><div class="ver">Verified by Veridact · {{ g.agent.operator }}</div></div><span class="pill {{ g.status }}">{{ g.status|capitalize }}</span></div>
-<div class="card" style="background:var(--bg);border:0;font-size:13px">{{ summary }}</div>
+<div class="card" style="background:var(--bg);border:0;font-size:13px">{{ summary }}<div class="sub" style="margin-top:6px">Last confirmed by you {{ g.confirmed }}</div></div>
 {% if g.pending %}<a class="banner" href="/app/approvals">{{ g.agent.name }} is waiting for your decision →</a>{% endif %}
 <h2>Activity</h2>
 <div class="list">
