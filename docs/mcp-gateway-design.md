@@ -139,6 +139,7 @@ The bank app and online banking get an **Agent access** page listing each connec
 - **Narrowing is instant.** Removing an account, payee or capability takes effect on the agent's next call. The gateway re-filters the tool list and tells the client the list changed.
 - **Widening needs re-consent.** Adding accounts, payees or higher limits sends the customer back through the consent screen with step-up. The agent can't widen its own mandate.
 - **Pause and revoke.** Each agent can be paused or revoked, and one switch revokes every agent.
+- **Review on reconnect.** When an agent the customer already allows signs them in again, the bank shows a review, not a new consent: *Keep as it is* (same mandate, terms unchanged, a fresh confirmation time and receipt), *Change* (the consent screen, starting from today's choice; the new mandate replaces the old) or *Stop*. If the agent asks for more than it has, the review says so, and Keep does not give it more. This is the basis for reconfirmation by trust level.
 - **One mandate per agent.** Claude and ChatGPT connected to the same account hold separate mandates and separate receipts.
 - **Notifications.** The customer gets a push when a mandate is created or changed, and a reminder a few days before expiry.
 
