@@ -8,7 +8,7 @@ This page answers the three questions bank architecture reviews ask first:
 2. *Why Valet, and not our identity vendor's agent product?*
 3. *How exactly is the agent bound to the customer, the token and the mandate?*
 
-The detail behind each answer is in the [Technical design](technical-design.md) and the [MCP gateway design](mcp-gateway-design.md).
+The detail behind each answer is in the [Technical design](technical-design.md), the [MCP gateway design](mcp-gateway-design.md) and the [Threat model](threat-model.md).
 
 ## 1. What Valet is
 
