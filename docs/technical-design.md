@@ -1,10 +1,10 @@
 # Veridact Valet: Technical Design
 
-Version 0.2 · 9 November 2026
+Version 0.3 · 14 November 2026
 
 ## 1. Scope and key decisions
 
-**Valet is an open-source profile of OAuth 2.0 standards, with reference code, that a bank deploys and runs itself on the identity platform it already has: the agent never holds a customer credential, every token is bound to the agent's key, every grant is a precise, expiring permission, and every exception goes to the customer in the bank's app.** This document specifies the design and the proof of concept (PoC) that implements it. The product case is in the [README](../README.md).
+**Valet is an open-source profile of OAuth 2.0 standards, with reference code, that a bank deploys and runs itself on the identity platform it already has: the agent never holds a customer credential, every token is bound to the agent's key, every grant is a precise, expiring permission, and every exception goes to the customer in the bank's app.** This document specifies the design and the proof of concept (PoC) that implements it. The product case is in the [README](../README.md); what Valet is, where it fits next to open banking and the identity platform, and the questions banks ask are in [Where Valet fits](where-valet-fits.md).
 
 | Decision | Choice | Why |
 | --- | --- | --- |
@@ -14,7 +14,7 @@ Version 0.2 · 9 November 2026
 | Token binding | DPoP (RFC 9449) on every token on the direct API; assistant platforms that cannot send DPoP yet get bearer-tier ceilings (§14) | A stolen token is useless without the agent’s private key |
 | Exceptions | OpenID CIBA, poll mode, with a one-time `valet_payment_once` authorisation detail | Approval happens in the bank app; the agent only waits |
 | Where limits live | The bank’s resource server, in its own ledger | Amounts and payees never leave the bank |
-| Agent identity | A pluggable `AgentRegistry`; the PoC uses a static signed list; production uses Veridact | Keeps Valet usable before Veridact is live |
+| Agent identity | A pluggable `AgentRegistry`; the PoC uses a static signed list; production uses Veridact. Vendor-hosted client metadata (CIMD) accepted only from an allowlist; never Dynamic Client Registration (§9.1, proposed) | Keeps Valet usable before Veridact is live; no anonymous clients |
 | Who runs it | The bank, in its own environment. Valet is a project, not a hosted service | Banks keep control, data and keys; no customer data leaves the bank |
 | Identity provider | The bank's own. Any OpenID Connect provider signs customers in; platforms with PAR, RAR and DPoP can also issue the agent's tokens (§12) | Works with Auth0, Keycloak, Ping, Entra ID, Okta, Curity and others; Valet adds only what the platform lacks |
 | Licence | Apache 2.0 | Patent grant and permissive reuse, as banks expect |
@@ -65,6 +65,10 @@ What a bank would otherwise design, build and test alone:
 - **No lock-in**: Apache 2.0, only open standards, and it runs on the identity platform the bank already has. A bank can fork it, or implement the profile itself and use only the tests.
 
 Valet is not a new standard competing with FAPI, and not a replacement for the bank's identity platform. It is the part between the standards and a working, interoperable product.
+
+### 1.4 Where Valet fits
+
+**Valet sits between the bank's identity platform and its banking APIs: the platform says who the customer is, open banking consent says what they agreed to, and Valet checks every agent action against that agreement and records the outcome.** It extends the bank's open banking consent model rather than replacing it, and runs on the bank's identity platform (PingFederate, Keycloak, Entra ID and others) rather than competing with it. The layer-by-layer view, the answers to the questions bank reviews ask, and the mapping to AP2, Verifiable Intent and the Personal Agent Protocol are in [Where Valet fits](where-valet-fits.md).
 
 ## 2. Architecture
 
@@ -206,6 +210,8 @@ grant_type=authorization_code&code=SplxlO…&code_verifier=dBjftJeZ4…
 
 **Access token claims (JWT, ES256, 5 minutes):** `iss`, `aud` (the bank API), `sub` (a pairwise customer id, different per agent), `client_id`, `grant_id`, `authorization_details`, `cnf.jkt`, `iat`, `exp`, `jti`.
 
+**How the claims bind the parties:** `sub` is the customer, `client_id` is the agent, `grant_id` points to the mandate the customer approved, and `cnf.jkt` ties all three to the agent's key, which every call must prove (check 1 and 3 below). **Proposed:** add an RFC 8693 actor claim, `act: {"sub": "<agent identity>"}`, so delegation is explicit in the form identity platforms already use for token exchange.
+
 **Check order at the resource server, stopping at the first failure:**
 
 | # | Check | Failure |
@@ -295,6 +301,15 @@ class AgentRegistry(Protocol):
 | `VeridactRegistry` (target) | The agent’s Veridact presentation at `/par`, verified locally; operator name and tier from the credential; trust from status lists and revocation push | Production |
 
 The consent screen shows the operator name only from the registry, never from the agent’s request, so a copycat cannot name itself after a real agent.
+
+### 9.1 Vendor-hosted agent identity (CIMD), proposed
+
+Agent ecosystems identify an agent by an HTTPS URL serving its metadata and signing keys: the Personal Agent Protocol does this, Claude does it through Client ID Metadata Documents (CIMD) hosted by Anthropic, and Veridact's `did:web` identities follow the same pattern.
+
+- **What CIMD proves:** the client ID is the platform's URL, and the authorisation code can only go to the platform's registered callback. **What it doesn't:** Claude's CIMD client authenticates as a public client (PKCE only), and it identifies the platform, not an individual agent. Claude uses CIMD only when the server metadata advertises `client_id_metadata_document_supported: true` and `none` in `token_endpoint_auth_methods_supported`.
+- **Proposed design:** a `CimdRegistry` behind the same `AgentRegistry` interface, accepting metadata URLs only from a bank-maintained allowlist, each with an assurance tier. Dynamic Client Registration stays off. Where a platform allows a client secret or key, the pre-registered confidential client remains preferred, because it adds client authentication at the token endpoint.
+- **Veridact alignment:** Veridact accepts CIMD-shaped metadata, so one agent URL serves both OAuth client identification and Veridact verification.
+- **Open point:** confirm CIMD support in the reference PingFederate version.
 
 ## 10. API reference
 

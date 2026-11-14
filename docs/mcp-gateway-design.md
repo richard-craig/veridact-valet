@@ -227,7 +227,7 @@ Claude uses the same connector infrastructure across Claude.ai, Desktop, mobile 
 
 - **Transport.** Remote MCP server over Streamable HTTP, public HTTPS.
 - **Discovery.** Protected resource metadata on the gateway, pointing to PingFederate's authorization server metadata.
-- **Client identification.** Claude supports DCR, CIMD and Anthropic-held credentials. CIMD is only used when the server metadata advertises both `client_id_metadata_document_supported: true` and `none` in `token_endpoint_auth_methods_supported`. Valet uses a **pre-registered confidential client** instead: the custom connector's client secret field is optional, and the bank's server requires it.
+- **Client identification.** Claude supports DCR, CIMD and Anthropic-held credentials. CIMD is only used when the server metadata advertises both `client_id_metadata_document_supported: true` and `none` in `token_endpoint_auth_methods_supported`. Valet uses a **pre-registered confidential client** instead: the custom connector's client secret field is optional, and the bank's server requires it. CIMD (Anthropic-hosted, "Use Claude's published identity") is an acceptable alternative only from an allowlist of metadata URLs: it proves where the authorisation code goes, but the CIMD client is public, so it does not authenticate the client at the token endpoint ([Technical design](technical-design.md) §9.1). Never enable Dynamic Client Registration.
 - **Directory listing.** For directory connectors, Anthropic-held credentials give a stable registered client without DCR sprawl.
 - **Refresh.** Rotate refresh tokens (Claude registers as a public client under DCR or CIMD; rotation applies regardless). Return `invalid_grant` when a refresh token is dead.
 - **Redirect URI.** Allowlist Claude's callback in the PingFederate client.
@@ -243,7 +243,7 @@ ChatGPT connects through the Apps SDK on the same MCP auth spec, so the gateway 
 
 - **Transport and discovery.** Same gateway URL and protected resource metadata as Claude.
 - **Resource parameter.** ChatGPT sends the gateway's canonical HTTPS identifier as `resource` during OAuth; PingFederate must echo it and bind the token's audience to it.
-- **Client identification.** ChatGPT supports CIMD, DCR and predefined OAuth clients, with PKCE. Valet uses a **predefined confidential client** per bank.
+- **Client identification.** ChatGPT supports CIMD, DCR and predefined OAuth clients, with PKCE. Valet uses a **predefined confidential client** per bank. CIMD is acceptable from an allowlist, on the same terms as for Claude.
 - **Token endpoint auth methods.** Publish only the methods the bank accepts (client secret for the predefined client).
 - **Per-tool security.** Declare `securitySchemes` on each tool so ChatGPT knows which scopes each needs and can prompt for re-linking.
 - **Token use.** ChatGPT exchanges the code for a token and sends it as `Authorization: Bearer` on each MCP request.

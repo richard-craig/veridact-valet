@@ -10,6 +10,7 @@ Think of a valet key: it starts the car but won't open the boot. Valet gives an 
 
 This repository holds the design and a working proof of concept. The design is in [`docs/`](docs/):
 
+- [Where Valet fits](docs/where-valet-fits.md): start here. What Valet is, where it sits next to open banking and the bank's identity platform, how the agent is bound to the customer, token and mandate, and how it lines up with AP2, Verifiable Intent and the Personal Agent Protocol.
 - [Technical design](docs/technical-design.md): the profile, data model, flows, check order, receipts, security and identity-provider support.
 - [MCP gateway design](docs/mcp-gateway-design.md) (draft, not yet built): how Claude, ChatGPT, Copilot and Gemini connect through a bank-run MCP gateway.
 
