@@ -25,7 +25,7 @@ to Keycloak on each start.
 ## Deploy
 
 ```bash
-git clone --branch demo/standard-bank-native-consent https://github.com/richard-craig/veridact-valet.git
+git clone --branch demo/native-consent https://github.com/richard-craig/veridact-valet.git
 cd veridact-valet
 SUBSCRIPTION="CoffeeMedicine" DNS_ZONE="<your zone>" DNS_ZONE_RG="<zone's resource group>" \
 ADMIN_CIDR="<your IP>/32" ./deploy/azure/deploy.sh
