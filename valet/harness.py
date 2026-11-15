@@ -68,7 +68,7 @@ class Harness:
         await self.login()
         url, pending = await self.kaya.start_connect(level)
         _, back = await self.consent(url, level, monthly)
-        await self.kaya.finish_connect(back["code"][0], pending, back["state"][0])
+        await self.kaya.finish_connect(back["code"][0], pending, back["state"][0], back["iss"][0])
         return self.kaya.session.grant_id
 
     async def decide(self, auth_req_id: str, approve: bool = True) -> str:

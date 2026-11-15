@@ -149,10 +149,13 @@ def native_harness(secret: str = SECRET) -> tuple[Harness, MockIdP]:
     return Harness(external_issuers={idp.issuer: ext}, internal_secret=secret), idp
 
 
-async def register(h: Harness, monthly: str = "2000.00", secret: str = SECRET) -> httpx.Response:
-    return await h.browser.post("/internal/grants", headers={"Authorization": f"Bearer {secret}"},
-                                json={"customer": "thandi@example.com", "client_id": "kaya", "level": "bill_payer",
-                                      "account": "acc_4821", "monthly_limit": monthly})
+async def register(h: Harness, monthly: str = "2000.00", secret: str = SECRET, bind: bool = True) -> httpx.Response:
+    """The bank's IdP registers a consent, with the agent's DPoP key as it learned it during authorisation (dpop_jkt)."""
+    body = {"customer": "thandi@example.com", "client_id": "kaya", "level": "bill_payer", "account": "acc_4821",
+            "monthly_limit": monthly}
+    if bind:
+        body["dpop_jkt"] = h.kaya.key.thumbprint
+    return await h.browser.post("/internal/grants", headers={"Authorization": f"Bearer {secret}"}, json=body)
 
 
 def use_token(h: Harness, token: str, gid: str) -> None:
@@ -234,13 +237,21 @@ def test_native_single_use_approval_from_the_banks_own_ciba():
         body = {"from_account": POWER[0], "to": {"name": POWER[1], "account": POWER[2]}, "amount": "1250.00",
                 "reference": "Oct"}
         with pytest.raises(ValetError) as ei:
-            await h.kaya.call("POST", "/api/payments", body)
+            await h.kaya.call("POST", "/api/payments", body, idempotency_key="power-oct-0001")
         assert ei.value.error == "approval_required"
         offered = ei.value.body["authorization_details"]
         # the bank's IdP ran the approval (e.g. Auth0 CIBA with RAR, Guardian push) and issued a one-off token
         once = idp.access_token(client_id="kaya", grant_id=g["grant_id"], jkt=h.kaya.key.thumbprint, details=offered,
                                 jti="once-1")
-        assert (await h.kaya.call("POST", "/api/payments", body, token=once))["status"] == "paid"
+        # the approved payment must be the one the bank held: under another Idempotency-Key it is refused
+        with pytest.raises(ValetError) as ei:
+            await h.kaya.call("POST", "/api/payments", body, token=once, idempotency_key="some-other-key")
+        assert ei.value.error == "approval_invalid"
+        paid = await h.kaya.call("POST", "/api/payments", body, token=once, idempotency_key="power-oct-0001")
+        assert paid["status"] == "paid"
+        # a retry with the same key is the same payment (not a second one); a new key is a spent approval
+        again = await h.kaya.call("POST", "/api/payments", body, token=once, idempotency_key="power-oct-0001")
+        assert again["payment_intent_id"] == paid["payment_intent_id"]
         with pytest.raises(ValetError) as ei:
             await h.kaya.call("POST", "/api/payments", body, token=once)
         assert ei.value.error == "approval_invalid"
@@ -250,7 +261,8 @@ def test_native_single_use_approval_from_the_banks_own_ciba():
         with pytest.raises(ValetError) as ei:
             await h.kaya.call("POST", "/api/payments", {**body, "to": {"name": "Fraudster", "account": "1"}}, token=fake)
         assert ei.value.error == "approval_invalid"
-        assert h.bank.store.spent(g["grant_id"]) == 0
+        assert h.bank.store.spent(g["grant_id"]) == 1250_00          # paid once, and counted in the month
+        assert h.bank.store.one("SELECT balance FROM accounts WHERE id='acc_4821'")["balance"] == 18_430_55 - 1250_00
     run(t())
 
 

@@ -2,7 +2,8 @@
 The bank API the agent calls, with Valet enforcement on every request (design section 5):
 
   1 DPoP proof   2 token   3 proof key = cnf.jkt   4 agent trusted   5 grant active (live)
-  6 action in authorization_details   7 limits / existing beneficiary   8 execute + receipt
+  6 action in authorization_details   7 limits / existing beneficiary, with the amount held in one locked step
+  8 instruct the bank's core banking API (Valet never executes), record the outcome, write a receipt
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 
 from ..common.crypto import digest
 from ..common.dpop import DPoPError, check_proof
@@ -19,7 +21,7 @@ from ..common.money import rand, to_cents, to_str
 from . import levels as L
 from .authz import _payment_summary, payment_detail
 from .context import Bank, OAuthError
-from .store import month_key
+from .payments import HELD
 
 
 @dataclass
@@ -50,7 +52,7 @@ class Caller:
 
 def router(bank: Bank) -> APIRouter:
     r = APIRouter(prefix="/api")
-    store, receipts = bank.store, bank.receipts
+    store, receipts, payments = bank.store, bank.receipts, bank.payments
 
     def receipt(c: Caller, action: str, outcome: str, basis: str, **kw: Any) -> dict[str, Any]:
         return receipts.append(grant_id=c.grant["id"], agent=c.grant["client_id"], customer=c.grant["customer"],
@@ -74,10 +76,15 @@ def router(bank: Bank) -> APIRouter:
         if grant["client_id"] != claims["client_id"]:
             raise OAuthError("invalid_token", "token and grant name different agents", 401)
         if claims.get("external"):
-            # Native mode: the IdP bound the token to the agent's key; bind the grant to that key on first use,
-            # so later tokens for this grant (and Valet's own approval tokens) must come from the same key.
+            # Native mode: the grant was bound to the agent's key at consent (the IdP passed dpop_jkt in the hand-off
+            # ticket or to /internal/grants). A grant with no key is refused, unless the bank has turned on binding
+            # at first use for an IdP that cannot pass the key yet (weaker: the first valid token claims the grant).
             if not grant["jkt"]:
-                store.x("UPDATE grants SET jkt=? WHERE id=? AND jkt IS NULL", jkt, grant["id"])
+                if not bank.cfg.allow_first_use_binding:
+                    raise OAuthError("invalid_token", "this grant was not bound to an agent key at consent", 401)
+                if store.x("UPDATE grants SET jkt=? WHERE id=? AND jkt IS NULL", jkt, grant["id"]) == 1:
+                    receipts.append(grant_id=grant["id"], agent=grant["client_id"], customer=grant["customer"],
+                                    action="key_binding", outcome="done", basis="first_use", jkt=jkt)
                 grant = store.grant(grant["id"])
             if grant["jkt"] != jkt:
                 raise OAuthError("invalid_token", "token is bound to a different key from this grant", 401)
@@ -144,6 +151,18 @@ def router(bank: Bank) -> APIRouter:
                          "agents can never add beneficiaries; the customer must do this in the bank app", 403)
 
     # ------------------------------------------------------------ payments
+    # Valet decides and holds; the bank's core banking API executes (payments.py, core.py; design section 5.1).
+    def answer(intent: dict[str, Any], c: Caller) -> JSONResponse:
+        status, body = payments.response(intent, c.grant)
+        return JSONResponse(body, status_code=status)
+
+    def offer(c: Caller, intent: dict[str, Any]) -> None:
+        """Hold a payment for the customer: 403 approval_required with the exact action the agent may ask for."""
+        store.x("INSERT OR REPLACE INTO hints VALUES (?,?,?,?)", c.grant["id"], intent["request_digest"],
+                json.dumps({**intent["detail"], "_reason": intent["reason"]}), time.time() + bank.cfg.approval_ttl)
+        raise OAuthError("approval_required", intent["reason"], 403, authorization_details=[intent["detail"]],
+                         payment_intent_id=intent["id"])
+
     @r.post("/payments")
     async def pay(request: Request, c: Caller = Depends(caller)):
         body = await request.json()
@@ -152,91 +171,127 @@ def router(bank: Bank) -> APIRouter:
             frm, to_name, to_acct = body["from_account"], str(body["to"]["name"]), str(body["to"]["account"])
         except (KeyError, TypeError, ValueError) as e:
             raise OAuthError("invalid_request", f"payment needs from_account, to.name, to.account and amount: {e}") from e
+        key = request.headers.get("Idempotency-Key", "")
+        if not 8 <= len(key) <= 64:
+            raise OAuthError("invalid_request", "an Idempotency-Key header of 8 to 64 characters is required: send the "
+                                                "same key when you retry a payment, and a new key for a new payment")
         reference = str(body.get("reference", ""))[:40]
         detail = payment_detail(frm, to_name, to_acct, cents, reference)
         summary = _payment_summary(detail)
 
         if c.once:
-            return pay_once_external(c, detail, summary) if c.external else pay_once(c, detail, summary)
+            return pay_once(c, key, detail, summary)
 
         p = allowed(c, "valet_payments", "pay_existing_beneficiary", frm)
         if not p:
             receipt(c, "payment", "refused", "refused", reason="insufficient_authorization", detail=summary)
             raise OAuthError("insufficient_authorization", "this access level cannot make payments", 403)
 
-        cus = c.grant["customer"]
-        existing = store.one("SELECT * FROM beneficiaries WHERE customer=? AND account=?", cus, to_acct)
+        d = digest(detail)
         limit = L.monthly_limit(c.details) or 0
-        spent = store.spent(c.grant["id"])
-        if existing and spent + cents <= limit:
-            res = execute(c, frm, to_name, cents, reference)
-            store.x("INSERT INTO ledger VALUES (?,?,?) ON CONFLICT(grant_id,month) DO UPDATE SET spent=spent+excluded.spent",
-                    c.grant["id"], month_key(), cents)
-            rec = receipt(c, "payment", "allowed", "grant", detail=summary)
-            return {**res, "receipt": rec["hash"], "spent_this_month": to_str(spent + cents), "monthly_limit": to_str(limit)}
-
-        reason = (f"{to_name} is not a saved beneficiary on this account" if not existing else
-                  f"{rand(cents)} would take this month to {rand(spent + cents)}, over the {rand(limit)} limit")
-        d = digest(detail)
-        store.x("INSERT OR REPLACE INTO hints VALUES (?,?,?,?)", c.grant["id"], d,
-                json.dumps({**detail, "_reason": reason}), time.time() + bank.cfg.approval_ttl)
-        receipt(c, "payment", "held", "approval_required", reason=reason, detail=summary)
-        raise OAuthError("approval_required", reason, 403, authorization_details=[detail])
-
-    def pay_once(c: Caller, detail: dict[str, Any], summary: dict[str, Any]):
-        ap = store.one("SELECT * FROM approvals WHERE id=?", c.claims.get("approval", ""))
-        problem = None
-        if not ap or ap["grant_id"] != c.grant["id"]:
-            problem = "unknown approval"
-        elif ap["status"] != "approved":
-            problem = f"approval is {ap['status']}"
-        elif ap["consumed"]:
-            problem = "this approval has already been used"
-        elif ap["expires"] < time.time():
-            problem = "this approval has expired"
-        elif digest(detail) != ap["digest"]:
-            problem = "this payment differs from what the customer approved"
-        if problem:
-            receipt(c, "payment", "refused", "refused", reason=problem, detail=summary, approval=c.claims.get("approval"))
-            raise OAuthError("approval_invalid", problem, 403)
+        # One locked step: find or create the intent, check the limit against what is spent and held, and hold the amount.
         with store.tx():
-            store.db.execute("UPDATE approvals SET consumed=1 WHERE id=?", (ap["id"],))
-        res = execute(c, detail["from"], detail["to"]["name"], to_cents(detail["amount"]["amount"]), detail.get("reference", ""))
-        rec = receipt(c, "payment", "allowed", "approval", approval=ap["id"], detail=summary)
-        return {**res, "receipt": rec["hash"]}
+            intent, new = payments.by_key(c.grant["client_id"], key), False
+            if intent is None:
+                new = True
+                existing = store.one("SELECT 1 FROM beneficiaries WHERE customer=? AND account=?", c.grant["customer"], to_acct)
+                used = store.spent(c.grant["id"]) + payments.reserved(c.grant["id"])
+                if existing and used + cents <= limit:
+                    intent = payments.create(c.grant, key, d, detail, cents, "reserved", "grant")
+                else:
+                    reason = (f"{to_name} is not a saved beneficiary on this account" if not existing else
+                              f"{rand(cents)} would take this month to {rand(used + cents)}, over the {rand(limit)} limit")
+                    intent = payments.create(c.grant, key, d, detail, cents, "approval_required", "grant", reason=reason,
+                                             expires=time.time() + bank.cfg.approval_ttl)
+        if intent["grant_id"] != c.grant["id"] or intent["request_digest"] != d:
+            receipt(c, "payment", "refused", "refused", reason="idempotency key reused for a different payment", detail=summary)
+            raise OAuthError("idempotency_key_reused", "this Idempotency-Key was used for a different payment; "
+                                                       "use a new key for a new payment", 422)
+        if intent["status"] == "approval_required":
+            if new:
+                receipt(c, "payment", "held", "approval_required", reason=intent["reason"], detail=summary,
+                        payment_intent=intent["id"], idempotency_key=key)
+            else:
+                rearm(intent)
+            offer(c, intent)
+        if intent["status"] in HELD:                             # new, or a retry of one the bank has not answered
+            intent = payments.execute(intent, c.grant)
+        return answer(intent, c)
 
-    def pay_once_external(c: Caller, detail: dict[str, Any], summary: dict[str, Any]):
-        """Native mode: the bank's own authorisation server ran the approval (e.g. CIBA with RAR) and issued a
-        single-use token for exactly one valet_payment_once. Valet still insists the action was one it offered,
-        that it matches, and that the token is spent once."""
-        approved = c.claims["authorization_details"][0]
-        d = digest(detail)
-        problem = None
-        hint = store.one("SELECT * FROM hints WHERE grant_id=? AND digest=? AND expires>?", c.grant["id"], d, time.time())
-        if digest(approved) != d:
-            problem = "this payment differs from what the customer approved"
-        elif not hint:
-            problem = "the bank did not offer this action for approval (or the offer expired)"
-        elif not c.claims.get("jti") or store.seen_jti("once:" + str(c.claims["jti"]),
-                                                       ttl=max(60, c.claims["exp"] - time.time() + 60)):
-            problem = "this approval has already been used"
-        if problem:
-            receipt(c, "payment", "refused", "refused", reason=problem, detail=summary)
+    def rearm(intent: dict[str, Any]) -> None:
+        """A retry of a held payment whose approval was declined or ran out: let the agent ask the customer again."""
+        ap = store.one("SELECT status, expires FROM approvals WHERE id=?", intent["approval"] or "")
+        if ap and (ap["status"] in ("denied", "cancelled", "expired") or ap["expires"] < time.time()):
+            store.x("UPDATE payment_intents SET approval=NULL WHERE id=? AND status='approval_required'", intent["id"])
+
+    def pay_once(c: Caller, key: str, detail: dict[str, Any], summary: dict[str, Any]):
+        """A single-use token for one approved action. It can only finish the payment the bank held for approval:
+        the same Idempotency-Key, the same payment, once. Valet's own approvals and, in native mode, the bank's
+        authorisation server's (e.g. CIBA with RAR) are both checked against that held intent."""
+        d, approved_ref = digest(detail), None
+        intent = payments.by_key(c.grant["client_id"], key)
+        if intent and intent["request_digest"] == d and intent["status"] != "approval_required" and intent["basis"] == "approval":
+            ref = f"idp:{c.claims.get('jti')}" if c.external else c.claims.get("approval")
+            if intent["approval"] == ref:                         # a retry of the approved payment: never pays twice
+                if intent["status"] in HELD:
+                    intent = payments.execute(intent, c.grant)
+                return answer(intent, c)
+
+        def refuse(problem: str):
+            receipt(c, "payment", "refused", "refused", reason=problem, detail=summary,
+                    approval=None if c.external else c.claims.get("approval"))
             raise OAuthError("approval_invalid", problem, 403)
-        store.x("DELETE FROM hints WHERE grant_id=? AND digest=?", c.grant["id"], d)
-        res = execute(c, detail["from"], detail["to"]["name"], to_cents(detail["amount"]["amount"]), detail.get("reference", ""))
-        rec = receipt(c, "payment", "allowed", "approval", approval=f"idp:{c.claims['jti']}", detail=summary)
-        return {**res, "receipt": rec["hash"]}
 
-    def execute(c: Caller, frm: str, to_name: str, cents: int, reference: str) -> dict[str, Any]:
-        acct = store.one("SELECT * FROM accounts WHERE id=? AND customer=?", frm, c.grant["customer"])
-        if not acct:
-            raise OAuthError("invalid_request", "unknown account", 400)
-        if acct["balance"] < cents:
-            raise OAuthError("insufficient_funds", "not enough money in the account", 422)
-        store.x("UPDATE accounts SET balance=balance-? WHERE id=?", cents, frm)
-        store.x("INSERT INTO transactions (account,time,description,amount,by_agent) VALUES (?,?,?,?,?)",
-                frm, time.time(), f"To {to_name}" + (f" ({reference})" if reference else ""), -cents, c.grant["client_id"])
-        return {"status": "paid", "to": to_name, "amount": to_str(cents), "currency": "ZAR"}
+        if c.external:
+            approved = c.claims["authorization_details"][0]
+            if digest(approved) != d:
+                refuse("this payment differs from what the customer approved")
+            if not store.one("SELECT 1 FROM hints WHERE grant_id=? AND digest=? AND expires>?", c.grant["id"], d, time.time()):
+                refuse("the bank did not offer this action for approval (or the offer expired)")
+            if not c.claims.get("jti"):
+                refuse("this approval has already been used")
+            approved_ref = f"idp:{c.claims['jti']}"
+        else:
+            ap = store.one("SELECT * FROM approvals WHERE id=?", c.claims.get("approval", ""))
+            if not ap or ap["grant_id"] != c.grant["id"]:
+                refuse("unknown approval")
+            if ap["status"] != "approved":
+                refuse(f"approval is {ap['status']}")
+            if ap["consumed"]:
+                refuse("this approval has already been used")
+            if ap["expires"] < time.time():
+                refuse("this approval has expired")
+            if d != ap["digest"]:
+                refuse("this payment differs from what the customer approved")
+            approved_ref = ap["id"]
+        if not intent or intent["grant_id"] != c.grant["id"] or intent["request_digest"] != d:
+            refuse("no held payment matches this Idempotency-Key: send the approved payment with the key of the request "
+                   "the bank held")
+        if not c.external and intent["approval"] != approved_ref:
+            refuse("this approval belongs to a different payment request")
+
+        # The single-use gate, in one locked step: spend the approval and move the intent to reserved, or neither.
+        with store.tx():
+            if c.external:
+                spent_once = not store.seen_jti("once:" + str(c.claims["jti"]), ttl=max(60, c.claims["exp"] - time.time() + 60))
+            else:
+                spent_once = store.db.execute("UPDATE approvals SET consumed=1 WHERE id=? AND consumed=0",
+                                              (approved_ref,)).rowcount == 1
+            ok = spent_once and payments.reserve_approved(intent, approved_ref)
+            if ok:
+                store.db.execute("DELETE FROM hints WHERE grant_id=? AND digest=?", (c.grant["id"], d))
+        if not ok:
+            refuse("this approval has already been used")
+        return answer(payments.execute(payments.get(intent["id"]), c.grant), c)
+
+    @r.get("/payments/{intent_id}")
+    async def payment_status(intent_id: str, c: Caller = Depends(caller)):
+        """Where a payment stands. Read-only: to move a pending payment on, retry it with the same Idempotency-Key."""
+        intent = payments.get(intent_id)
+        if not intent or intent["grant_id"] != c.grant["id"]:
+            raise OAuthError("not_found", "no such payment for this grant", 404)
+        return {"payment_intent_id": intent["id"], "state": intent["status"], "amount": to_str(intent["amount"]),
+                "currency": "ZAR", "to": intent["detail"]["to"]["name"], "bank_payment_id": intent["bank_payment_id"],
+                "reason": intent["reason"]}
 
     return r

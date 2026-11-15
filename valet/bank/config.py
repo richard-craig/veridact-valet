@@ -25,6 +25,10 @@ class BankConfig:
     approval_ttl: int = 300
     ciba_interval: int = 2
     max_pending_approvals: int = 3
+    # Payments the bank has not confirmed or declined (a timeout, a crash): ask the bank again after this long, and
+    # release the hold only once the bank has had this long to say it never received the instruction.
+    reconcile_after: int = 30
+    abandon_after: int = 900
     # Policy ceilings the bank allows agents (cents)
     max_monthly_limit: int = 5_000_00
     max_grant_days: int = 90
@@ -34,6 +38,11 @@ class BankConfig:
     # Shared secret for /internal/grants (native mode: the bank's IdP registers consents). Unset: endpoint off.
     # Production: mTLS between the IdP and Valet instead of a shared secret.
     internal_secret: str = field(default_factory=lambda: os.environ.get("VALET_INTERNAL_SECRET", ""))
+    # Native mode: a grant is bound to the agent's DPoP key at consent (the IdP passes dpop_jkt in the hand-off ticket
+    # or to /internal/grants). Binding on the first API call instead is weaker and off unless the bank turns it on,
+    # for an IdP that cannot yet pass the key: VALET_ALLOW_FIRST_USE_BINDING=1.
+    allow_first_use_binding: bool = field(
+        default_factory=lambda: os.environ.get("VALET_ALLOW_FIRST_USE_BINDING", "") in ("1", "true", "yes"))
     # Consent hand-off from the bank's IdP (native mode, handoff.py). Unset secret: hand-off off.
     handoff_secret: str = field(default_factory=lambda: os.environ.get("VALET_HANDOFF_SECRET", ""))
     # Which IdPs may hand customers over, and the only address each may be returned to:

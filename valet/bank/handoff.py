@@ -6,6 +6,10 @@ Consent hand-off: the bank's IdP signs the customer in, Valet shows the consent 
     Valet --auto-POST valet_result=...--> IdP (back into the same login)               (result signed by Valet)
     IdP issues the agent's DPoP-bound token with valet_grant=<grant id>
 
+The ticket carries dpop_jkt, the thumbprint of the agent's DPoP key as the IdP learned it during authorisation (the
+dpop_jkt request parameter, RFC 9449 section 10). Valet binds the grant to that key here, at consent, so the grant
+cannot be claimed later by a token bound to another key.
+
 Why hand off rather than let the IdP draw its own consent screen: every IdP then shows the same screen, the customer
 can choose less than the agent asked for (Auth0 Actions, for one, cannot change authorization_details), and the
 grant is created where its rules live.
@@ -160,7 +164,8 @@ def router(bank: Bank) -> APIRouter:
         elif form.get("decision") == "allow":
             try:
                 g = create_grant(bank, cus, agent, str(form.get("level", "view_only")), str(form.get("account", "")),
-                                 int(form.get("monthly") or 2_000_00), via="bank identity provider (consent hand-off)")
+                                 int(form.get("monthly") or 2_000_00), via="bank identity provider (consent hand-off)",
+                                 jkt=str(t.get("dpop_jkt") or "") or None)
             except ValueError as e:
                 return error_page(request, f"That choice isn't possible: {e}.")
             result |= {"decision": "allow", "grant_id": g["id"]}

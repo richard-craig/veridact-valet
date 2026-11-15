@@ -217,7 +217,7 @@ Each outcome carries machine-readable reason codes, such as `PAYEE_NOT_IN_MANDAT
 
 1. **Risk can escalate, never override.** A separate risk score (amount anomaly, unusual timing, velocity, first payment to a payee by this agent) can turn `APPROVED` into `APPROVAL_REQUIRED`. It can never turn `DECLINED` into anything else, and it never replaces the mandate check. Policy and risk results are stored separately in the receipt.
 2. **Serialised limit checks.** Checking the monthly limit, payment count and remaining budget, and reserving the amount, happen in one locked step per mandate. Two parallel payment calls can't both pass a cap that only one fits under. A reservation is released if the customer declines or the payment fails.
-3. **Idempotency on every write.** `bank.pay_existing_payee` requires an idempotency key from the agent. A retried call with the same key returns the original outcome and never creates a second payment or approval request.
+3. **Idempotency on every write.** `bank.pay_existing_payee` requires an idempotency key from the agent. A retried call with the same key returns the original outcome and never creates a second payment or approval request. The gateway then instructs the bank's payments API through the same adapter as the direct API, with the approval id as the bank's idempotency key, so two status checks at once still produce one payment. Valet never executes the payment itself (Technical design §5.1).
 4. **Original decisions are immutable.** The customer's approve or decline is a new receipt linked to the original, never an edit to it.
 5. **Same checks as the core API.** The gateway calls the same enforcement component as the direct API ([Technical Design](technical-design.md) §5), not a second policy engine, so each rule is written and tested once.
 
@@ -227,7 +227,7 @@ Claude uses the same connector infrastructure across Claude.ai, Desktop, mobile 
 
 - **Transport.** Remote MCP server over Streamable HTTP, public HTTPS.
 - **Discovery.** Protected resource metadata on the gateway, pointing to PingFederate's authorization server metadata.
-- **Client identification.** Claude supports DCR, CIMD and Anthropic-held credentials. CIMD is only used when the server metadata advertises both `client_id_metadata_document_supported: true` and `none` in `token_endpoint_auth_methods_supported`. Valet uses a **pre-registered confidential client** instead: the custom connector's client secret field is optional, and the bank's server requires it.
+- **Client identification.** Claude supports DCR, CIMD and Anthropic-held credentials. CIMD is only used when the server metadata advertises both `client_id_metadata_document_supported: true` and `none` in `token_endpoint_auth_methods_supported`. Valet uses a **pre-registered confidential client** instead: the custom connector's client secret field is optional, and the bank's server requires it. CIMD (Anthropic-hosted, "Use Claude's published identity") is an acceptable alternative only from an allowlist of metadata URLs: it proves where the authorisation code goes, but the CIMD client is public, so it does not authenticate the client at the token endpoint ([Technical design](technical-design.md) §9.1). Never enable Dynamic Client Registration.
 - **Directory listing.** For directory connectors, Anthropic-held credentials give a stable registered client without DCR sprawl.
 - **Refresh.** Rotate refresh tokens (Claude registers as a public client under DCR or CIMD; rotation applies regardless). Return `invalid_grant` when a refresh token is dead.
 - **Redirect URI.** Allowlist Claude's callback in the PingFederate client.
@@ -243,7 +243,7 @@ ChatGPT connects through the Apps SDK on the same MCP auth spec, so the gateway 
 
 - **Transport and discovery.** Same gateway URL and protected resource metadata as Claude.
 - **Resource parameter.** ChatGPT sends the gateway's canonical HTTPS identifier as `resource` during OAuth; PingFederate must echo it and bind the token's audience to it.
-- **Client identification.** ChatGPT supports CIMD, DCR and predefined OAuth clients, with PKCE. Valet uses a **predefined confidential client** per bank.
+- **Client identification.** ChatGPT supports CIMD, DCR and predefined OAuth clients, with PKCE. Valet uses a **predefined confidential client** per bank. CIMD is acceptable from an allowlist, on the same terms as for Claude.
 - **Token endpoint auth methods.** Publish only the methods the bank accepts (client secret for the predefined client).
 - **Per-tool security.** Declare `securitySchemes` on each tool so ChatGPT knows which scopes each needs and can prompt for re-linking.
 - **Token use.** ChatGPT exchanges the code for a token and sends it as `Authorization: Bearer` on each MCP request.

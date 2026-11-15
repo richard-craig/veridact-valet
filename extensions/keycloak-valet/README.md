@@ -7,7 +7,7 @@ It adds two things to Keycloak:
 
 | Piece | Keycloak SPI | What it does |
 |---|---|---|
-| **Veridact Valet: AI agent consent** (`valet-consent`) | Authenticator | After Keycloak signs the customer in, sends them to Valet's consent screen with a signed ticket, then checks Valet's signed answer when they come back. On "allow" it records the Valet grant id in the user session; on "deny" the agent gets the standard `error=access_denied`. Runs only for clients with attribute `valet.agent=true`. |
+| **Veridact Valet: AI agent consent** (`valet-consent`) | Authenticator | After Keycloak signs the customer in, sends them to Valet's consent screen with a signed ticket (which carries the agent's DPoP key thumbprint, `dpop_jkt`), then checks Valet's signed answer when they come back. On "allow" it records the Valet grant id in the user session; on "deny" the agent gets the standard `error=access_denied`. Runs only for clients with attribute `valet.agent=true`. |
 | **Veridact Valet: grant id** (`valet-grant-mapper`) | Protocol mapper | Puts that grant id in the agent's access tokens as `valet_grant`, including refreshed ones. |
 
 Keycloak keeps doing what it already does well: sign-in, PAR, PKCE, `private_key_jwt`, DPoP-bound tokens and
@@ -17,13 +17,13 @@ app stops a perfectly valid Keycloak token on its next call.
 ## How a connect works
 
 ```
-Kaya ──PAR (private_key_jwt, PKCE, valet_level=bill_payer)──▶ Keycloak
+Kaya ──PAR (private_key_jwt, PKCE, dpop_jkt, valet_level=bill_payer)──▶ Keycloak
 Customer's browser ──▶ Keycloak sign-in (cookie or username + password; the bank's normal policy)
-Keycloak [valet-consent] ──302 /handoff/consent?ticket=…──▶ Valet          ticket: HS256, 5 min, nonce, return address
-Customer picks a level and limit on the bank's consent screen; Valet creates the grant under the bank's policy
+Keycloak [valet-consent] ──302 /handoff/consent?ticket=…──▶ Valet          ticket: HS256, 5 min, nonce, return address, dpop_jkt
+Customer picks a level and limit on the bank's consent screen; Valet creates the grant under the bank's policy, bound to dpop_jkt
 Valet ──auto-POST valet_result=…──▶ Keycloak (same login)                   result: HS256, 2 min, same nonce, grant id
 Keycloak [valet-consent] verifies signature, audience, expiry and nonce; records the grant id
-Keycloak ──code──▶ Kaya ──token request (DPoP)──▶ Keycloak: access token with cnf.jkt and valet_grant
+Keycloak ──code──▶ Kaya ──token request (DPoP, same key or refused)──▶ Keycloak: access token with cnf.jkt and valet_grant
 Kaya ──API call (DPoP)──▶ Valet enforcement: Keycloak's signature, issuer, audience, key binding, live grant status, limits
 ```
 
@@ -66,8 +66,14 @@ Keycloak upgrade.
 
 3. **Valet** accepts Keycloak's tokens through `VALET_EXTERNAL_ISSUERS` (issuer, JWKS URI and audience).
 
-Approvals keep running through Valet (its CIBA endpoint), because Keycloak's CIBA cannot carry RAR. Valet binds the
-grant to the agent's DPoP key on the first call, so its approval tokens only work for the same agent key.
+Approvals keep running through Valet (its CIBA endpoint), because Keycloak's CIBA cannot carry RAR.
+
+**Key binding.** The agent sends `dpop_jkt` in its pushed request (RFC 9449 section 10). Keycloak 26.4 binds the
+authorisation code to that key, and this extension copies the thumbprint into the hand-off ticket, so Valet binds the
+grant to the agent's key when the customer consents. A token for the grant bound to any other key is refused, and
+Valet's approval tokens only go to the bound key. An agent that sends no `dpop_jkt` gets a grant Valet's API will not
+honour, unless the bank sets `VALET_ALLOW_FIRST_USE_BINDING=1` on Valet (binding on the first call: weaker).
+Clients on the MCP gateway's bearer tier send no key and are held to that tier's ceiling.
 
 ## What has been tested
 
@@ -85,8 +91,11 @@ Run against **Keycloak 26.4.0** with the extension installed:
   `error=access_denied` with no code.
 - **Forgeries:** a result signed with the wrong secret ("bad signature") and a correctly signed result carrying
   another login's nonce ("does not match this login") were both refused, and Kaya got `access_denied`.
+- **Key binding (15 November 2026):** Kaya's grant was bound to its key at consent. A copied authorisation code sent
+  with Kaya's client credentials but another DPoP key was refused by Keycloak ("DPoP Proof public key thumbprint does
+  not match dpop_jkt"). A connect without `dpop_jkt` produced a grant that Valet's API refused.
 
-Valet's side is also covered by `tests/test_handoff.py` (14 tests).
+Valet's side is also covered by `tests/test_handoff.py`.
 
 ## Not done yet
 

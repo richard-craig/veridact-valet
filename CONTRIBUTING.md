@@ -16,8 +16,8 @@ agent builders, lawyers and risk people.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt pytest
-python -m pytest -q      # 49 tests
-python demo.py           # 22 checks; exits non-zero if any protection fails
+python -m pytest -q      # 93 tests
+python demo.py           # 24 checks; exits non-zero if any protection fails
 ```
 
 Every pull request should keep the tests and the demo passing. A change to how a check, approval or receipt

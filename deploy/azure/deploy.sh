@@ -24,7 +24,7 @@ LOCATION="${LOCATION:-southafricanorth}"
 VM="${VM:-vm-valet-demo}"
 VM_SIZE="${VM_SIZE:-Standard_B2ms}"          # 2 vCPU, 8 GiB: Keycloak plus four small services
 REPO="${REPO:-https://github.com/richard-craig/veridact-valet.git}"
-BRANCH="${BRANCH:-demo/standard-bank-native-consent}"
+BRANCH="${BRANCH:-demo/native-consent}"
 AUTO_SHUTDOWN_UTC="${AUTO_SHUTDOWN_UTC:-}"    # e.g. 1900 = 21:00 SAST; empty = none
 
 sfx="${LABEL:+.$LABEL}"
