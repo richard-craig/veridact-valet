@@ -18,6 +18,7 @@ from ..common.dpop import DPoPError, check_proof
 from ..common.money import to_cents, to_str
 from .consents import ConsentService, Problem
 from .context import Bank, OAuthError
+from .core import CoreUnavailable, PaymentInstruction
 
 
 def router(bank: Bank, svc: ConsentService) -> APIRouter:
@@ -120,14 +121,23 @@ def router(bank: Bank, svc: ConsentService) -> APIRouter:
         if d["decision"] != "permit":
             refuse(d)
         a = account_of(claims, body.get("from_account", ""))
-        if not a or a["balance"] < cents:
+        if not a:
             svc.settle(d["decision_id"], "released")
             raise Problem(422, "invalid_request", "Insufficient funds")
-        with store.tx():
-            store.db.execute("UPDATE accounts SET balance=balance-? WHERE id=?", (cents, a["id"]))
-            store.db.execute("INSERT INTO transactions (account,time,description,amount,by_agent) VALUES (?,?,?,?,?)",
-                             (a["id"], time.time(), f"{creditor.get('name', 'Payment')} {body.get('reference', '')}".strip(),
-                              -cents, claims["client_id"]))
+        # Valet never executes: the bank's core banking API does, idempotent on the decision id that holds the amount.
+        try:
+            result = bank.core.execute(PaymentInstruction(
+                payment_intent_id=d["decision_id"], customer=a["customer"], from_account=a["id"],
+                to_name=str(creditor.get("name", "Payment")), to_account=to_acct, cents=cents,
+                reference=str(body.get("reference", ""))[:20], by_agent=claims["client_id"]))
+        except CoreUnavailable as e:
+            # Unknown outcome: the payment may have gone through, so the reservation stays until the bank reconciles.
+            raise Problem(503, "outcome_unknown", "The bank has not confirmed this payment",
+                          "The amount stays reserved until the bank confirms or declines it.") from e
+        if result.status != "paid":
+            svc.settle(d["decision_id"], "released")
+            raise Problem(422, "invalid_request", "Insufficient funds" if result.reason == "insufficient_funds"
+                          else "The bank declined this payment")
         svc.settle(d["decision_id"], "confirmed")
         return {"status": "accepted", "amount": {"amount": to_str(cents), "currency": "ZAR"},
                 "creditor": creditor.get("name"), "consent_id": claims["grant_id"]}

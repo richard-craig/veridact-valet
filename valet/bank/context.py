@@ -9,7 +9,9 @@ from fastapi.responses import JSONResponse
 
 from ..common.crypto import Key, verify
 from .config import BankConfig
+from .core import CoreBanking, DemoCore
 from .idp import OidcConfig, OidcSignIn
+from .payments import Payments
 from .receipts import Receipts
 from .registry import AgentRecord, StaticRegistry
 from .store import Store
@@ -30,7 +32,8 @@ class OAuthError(Exception):
 
 class Bank:
     def __init__(self, cfg: BankConfig | None = None, registry: StaticRegistry | None = None,
-                 signin: OidcSignIn | None = None, external_issuers: dict[str, ExternalIssuer] | None = None):
+                 signin: OidcSignIn | None = None, external_issuers: dict[str, ExternalIssuer] | None = None,
+                 core: CoreBanking | None = None):
         self.cfg = cfg or BankConfig()
         self.store = Store(self.cfg.database)
         self.store.seed_demo()
@@ -40,6 +43,9 @@ class Bank:
         self.receipt_key = Key.generate() if in_memory else Key.load_or_create(keys / "receipts.pem")
         self.registry = registry or StaticRegistry(self.cfg.data_dir, self.cfg.registry_cache_s)
         self.receipts = Receipts(self.store, self.receipt_key)
+        # Valet never executes a payment: it instructs the bank's core banking API (the PoC's fictional one here).
+        self.core: CoreBanking = core or DemoCore(self.store)
+        self.payments = Payments(self.store, self.core, self.receipts, self.cfg.reconcile_after, self.cfg.abandon_after)
         # Customer sign-in: the bank's own IdP over OpenID Connect, or the PoC's demo password (signin is None).
         if signin is None:
             oidc = OidcConfig.from_env(self.cfg.issuer)

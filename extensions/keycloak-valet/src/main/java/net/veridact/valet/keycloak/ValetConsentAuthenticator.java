@@ -24,7 +24,8 @@ import java.util.Map;
  *
  * Runs only for clients marked as AI agents (client attribute valet.agent=true). After Keycloak has signed the
  * customer in, it sends them to Valet with a short-lived signed ticket. Valet shows the bank's consent screen,
- * registers the grant under the bank's policy, and posts a signed result back here. On "allow" the grant id is
+ * registers the grant under the bank's policy and binds it to the agent's DPoP key (dpop_jkt in the ticket), and posts
+ * a signed result back here. On "allow" the grant id is
  * kept as a user-session note, which ValetGrantMapper puts in the agent's access tokens. On "deny" the agent gets
  * the standard OAuth error access_denied.
  */
@@ -34,6 +35,7 @@ public class ValetConsentAuthenticator implements Authenticator {
     static final String CONSENT_ATTRIBUTE = "valet.consent";                     // apps using the Consent Service
     static final String LEVEL_PARAM_NOTE = "client_request_param_valet_level";   // ?valet_level=... on the request
     static final String CONSENT_PARAM_NOTE = "client_request_param_consent_id";  // ?consent_id=... (Open Banking style)
+    static final String DPOP_JKT_NOTE = "dpop_jkt";                             // OIDCLoginProtocol.DPOP_JKT (26.4+)
 
     private static final Logger LOG = Logger.getLogger(ValetConsentAuthenticator.class);
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -75,6 +77,11 @@ public class ValetConsentAuthenticator implements Authenticator {
         if (level != null) ticket.put("requested_level", level);
         String consentId = auth.getClientNote(CONSENT_PARAM_NOTE);  // the app created this consent at the bank first
         if (consentId != null) ticket.put("consent_id", consentId);
+        // The agent's DPoP key, as Keycloak learned it during authorisation: the dpop_jkt request parameter, or a
+        // DPoP proof on the pushed request (RFC 9449 section 10). Keycloak binds the authorisation code to it, and
+        // Valet binds the grant to it now, at consent, so no token bound to another key can claim the grant later.
+        String dpopJkt = auth.getClientNote(DPOP_JKT_NOTE);
+        if (dpopJkt != null && !dpopJkt.isBlank()) ticket.put("dpop_jkt", dpopJkt);
         ticket.put("return_to", ctx.getActionUrl(ctx.generateAccessCode()).toString());
 
         String to = UriBuilder.fromUri(s.consentUrl()).queryParam("ticket", HandoffToken.sign(ticket, s.secret())).build().toString();

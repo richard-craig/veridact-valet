@@ -29,8 +29,11 @@ from .registry import AgentRecord
 
 
 def create_grant(bank: Bank, customer: dict[str, Any], agent: AgentRecord, level: str, account_id: str,
-                 monthly_cents: int, via: str) -> dict[str, Any]:
-    """Apply the bank's policy, store the grant and write the consent receipt. Raises ValueError on a bad choice."""
+                 monthly_cents: int, via: str, jkt: str | None = None) -> dict[str, Any]:
+    """Apply the bank's policy, store the grant and write the consent receipt. Raises ValueError on a bad choice.
+
+    `jkt` is the thumbprint of the agent's DPoP key, named during authorisation. The grant is bound to it here, at
+    consent, so no token or API call can claim the grant with another key."""
     cfg, store = bank.cfg, bank.store
     acct = store.one("SELECT * FROM accounts WHERE id=? AND customer=?", account_id, customer["id"])
     if not acct:
@@ -44,11 +47,11 @@ def create_grant(bank: Bank, customer: dict[str, Any], agent: AgentRecord, level
                            "client_id": agent.client_id})
     gid, now = random_id("g", 12), time.time()
     store.x("INSERT INTO grants VALUES (?,?,?,?,?,?,?,?,?,?,?)", gid, customer["id"], agent.client_id, level,
-            json.dumps(details), "active", now, now + cfg.max_grant_days * 86400, None, consent_hash,
+            json.dumps(details), "active", now, now + cfg.max_grant_days * 86400, jkt or None, consent_hash,
             sha256_b64u(customer["id"] + agent.client_id)[:22])
     bank.receipts.append(grant_id=gid, agent=agent.client_id, customer=customer["id"], action="connect",
                          outcome="allowed", basis="consent", detail={"summary": summary, "via": via},
-                         consent_hash=consent_hash)
+                         consent_hash=consent_hash, key_binding="at_consent" if jkt else "none")
     return store.grant(gid)
 
 
@@ -65,6 +68,7 @@ def router(bank: Bank) -> APIRouter:
 
     def view(g: dict[str, Any]) -> dict[str, Any]:
         return {"grant_id": g["id"], "status": g["status"], "client_id": g["client_id"], "level": g["level"],
+                "key_bound": bool(g["jkt"]),
                 "authorization_details": g["details"], "expires_at": int(g["expires"]),
                 "spent_this_month": to_str(bank.store.spent(g["id"]))}
 
@@ -81,7 +85,8 @@ def router(bank: Bank) -> APIRouter:
         try:
             monthly = to_cents(body.get("monthly_limit", "2000.00"))
             g = create_grant(bank, dict(customer), agent, str(body.get("level", "view_only")),
-                             str(body.get("account", "")), monthly, via="bank identity provider")
+                             str(body.get("account", "")), monthly, via="bank identity provider",
+                             jkt=str(body.get("dpop_jkt") or "") or None)
         except ValueError as e:
             raise OAuthError("invalid_request", str(e)) from e
         return JSONResponse(view(g), status_code=201)

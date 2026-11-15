@@ -121,29 +121,65 @@ def test_handoff_is_off_without_a_secret():
     run(t())
 
 
-def test_idp_tokens_bind_the_grant_to_the_agents_key_and_idp_revoke_ends_it():
+def native(**kw) -> tuple[Harness, MockIdP]:
+    idp = MockIdP(issuer="http://kc.test/realms/marula")
+    ext = {idp.issuer: ExternalIssuer(issuer=idp.issuer, audience="marula-api", jwks=idp.jwks)}
+    return harness(external_issuers=ext, **kw), idp
+
+
+def use(h: Harness, idp: MockIdP, gid: str, key=None) -> None:
+    key = key or h.kaya.key
+    h.kaya.key, h.kaya.session.grant_id = key, gid
+    h.kaya.session.access_token = idp.access_token(client_id="kaya", grant_id=gid, jkt=key.thumbprint, details=[])
+
+
+def test_the_grant_is_bound_to_the_agents_key_at_consent_and_idp_revoke_ends_it():
     async def t():
-        idp = MockIdP(issuer="http://kc.test/realms/marula")
-        h = harness(external_issuers={idp.issuer: ExternalIssuer(issuer=idp.issuer, audience="marula-api", jwks=idp.jwks)})
-        gid = result_of((await decide(h, ticket())).text)["grant_id"]
-        h.kaya.session.grant_id = gid
-        h.kaya.session.access_token = idp.access_token(client_id="kaya", grant_id=gid, jkt=h.kaya.key.thumbprint, details=[])
+        from valet.common.crypto import Key
+        h, idp = native()
+        # the IdP learned the agent's key during authorisation (dpop_jkt) and passes it in the ticket
+        gid = result_of((await decide(h, ticket(dpop_jkt=h.kaya.key.thumbprint))).text)["grant_id"]
+        assert h.bank.store.grant(gid)["jkt"] == h.kaya.key.thumbprint           # bound before any token or API call
+        # a valid IdP token for the same grant and agent, but bound to another key, cannot claim the grant
+        mine = h.kaya.key
+        use(h, idp, gid, Key.generate())
+        with pytest.raises(ValetError) as ei:
+            await h.kaya.accounts()
+        assert ei.value.status == 401
+        use(h, idp, gid, mine)
         assert await h.kaya.accounts()
-        assert h.bank.store.grant(gid)["jkt"] == h.kaya.key.thumbprint           # bound on first use
         # approvals still run through Valet (Keycloak's CIBA has no RAR): the bound key is what lets them work
         res = await h.kaya.pay("acc_4821", "City Power", "30087712", "100.00")
         await h.login()
         await h.decide(res["auth_req_id"])
         assert (await h.kaya.check_approval(res["auth_req_id"]))["outcome"] == "paid"
-        # a token for the same grant bound to another key is refused
-        from valet.common.crypto import Key
-        other = Key.generate()
-        h.kaya.session.access_token = idp.access_token(client_id="kaya", grant_id=gid, jkt=other.thumbprint, details=[])
-        h.kaya.key = other
-        with pytest.raises(ValetError) as ei:
-            await h.kaya.accounts()
-        assert ei.value.status == 401
         # the customer disconnects in the IdP's account pages; the IdP tells Valet
         r = await h.browser.delete(f"/internal/grants/{gid}", headers={"Authorization": "Bearer " + "i" * 32})
         assert r.json()["status"] == "revoked"
+    run(t())
+
+
+def test_a_grant_with_no_key_is_refused_unless_the_bank_allows_binding_at_first_use():
+    async def t():
+        from valet.common.crypto import Key
+        h, idp = native()
+        gid = result_of((await decide(h, ticket())).text)["grant_id"]            # an IdP that did not pass dpop_jkt
+        assert h.bank.store.grant(gid)["jkt"] is None
+        use(h, idp, gid)
+        with pytest.raises(ValetError) as ei:
+            await h.kaya.accounts()
+        assert ei.value.status == 401 and "not bound" in str(ei.value)
+        assert h.bank.store.grant(gid)["jkt"] is None                            # and the call did not bind it
+
+        # the bank turns on first-use binding for an IdP that cannot pass the key: weaker, and recorded as such
+        h, idp = native(allow_first_use_binding=True)
+        gid = result_of((await decide(h, ticket())).text)["grant_id"]
+        use(h, idp, gid)
+        assert await h.kaya.accounts()
+        assert h.bank.store.grant(gid)["jkt"] == h.kaya.key.thumbprint
+        assert any(r["action"] == "key_binding" and r["basis"] == "first_use" for r in h.bank.receipts.for_grant(gid))
+        use(h, idp, gid, Key.generate())
+        with pytest.raises(ValetError) as ei:
+            await h.kaya.accounts()
+        assert ei.value.status == 401
     run(t())

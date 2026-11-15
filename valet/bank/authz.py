@@ -47,6 +47,7 @@ def router(bank: Bank) -> APIRouter:
         return {"issuer": i, "pushed_authorization_request_endpoint": f"{i}/par", "authorization_endpoint": f"{i}/authorize",
                 "token_endpoint": f"{i}/token", "backchannel_authentication_endpoint": f"{i}/bc-authorize",
                 "jwks_uri": f"{i}/jwks", "require_pushed_authorization_requests": True,
+                "authorization_response_iss_parameter_supported": True,
                 "token_endpoint_auth_methods_supported": ["private_key_jwt"], "dpop_signing_alg_values_supported": ["ES256"],
                 "authorization_details_types_supported": ["valet_accounts", "valet_payments", "valet_payment_once"],
                 "backchannel_token_delivery_modes_supported": ["poll"], "code_challenge_methods_supported": ["S256"],
@@ -75,8 +76,20 @@ def router(bank: Bank) -> APIRouter:
                 raise OAuthError("invalid_authorization_details", "authorization_details is not JSON") from e
             if not isinstance(details, list) or any(d.get("type") not in KNOWN_TYPES for d in details):
                 raise OAuthError("invalid_authorization_details", "unknown authorization_details type")
+            # The agent names its DPoP key now (RFC 9449 section 10: dpop_jkt, or a DPoP proof on this request), so
+            # the grant is bound to that key when the customer consents, before any token or API call exists.
+            jkt = form.get("dpop_jkt") or ""
+            if request.headers.get("DPoP"):
+                proved = dpop_jkt(request)
+                if jkt and jkt != proved:
+                    raise OAuthError("invalid_request", "dpop_jkt does not match the DPoP proof on this request")
+                jkt = proved
+            if not jkt:
+                raise OAuthError("invalid_request", "dpop_jkt (or a DPoP proof) is required: the grant is bound to the "
+                                                    "agent's key when the customer consents")
             request_uri = "urn:ietf:params:oauth:request_uri:" + secrets.token_urlsafe(24)
-            params = {k: form.get(k) for k in ("redirect_uri", "state", "code_challenge")} | {"details": details}
+            params = ({k: form.get(k) for k in ("redirect_uri", "state", "code_challenge")}
+                      | {"details": details, "dpop_jkt": jkt})
             store.x("INSERT INTO par VALUES (?,?,?,?,0)", request_uri, rec.client_id, json.dumps(params), time.time() + cfg.par_ttl)
             return JSONResponse({"request_uri": request_uri, "expires_in": cfg.par_ttl}, status_code=201)
         except OAuthError as e:
@@ -126,18 +139,21 @@ def router(bank: Bank) -> APIRouter:
         store.x("UPDATE par SET used=1 WHERE request_uri=?", form["request_uri"])
         redirect, state = params["redirect_uri"], params.get("state") or ""
         if form.get("decision") != "allow":
-            return RedirectResponse(redirect + "?" + urlencode({"error": "access_denied", "state": state}), 303)
+            return RedirectResponse(redirect + "?" + urlencode({"error": "access_denied", "state": state,
+                                                                "iss": cfg.issuer}), 303)
         rec = bank.registry.lookup(form["client_id"])
         try:
             grant = create_grant(bank, cus, rec, form.get("level", "view_only"), form.get("account", ""),
-                                 int(form.get("monthly") or 2_000_00), via="Valet consent screen")
+                                 int(form.get("monthly") or 2_000_00), via="Valet consent screen",
+                                 jkt=params["dpop_jkt"])
         except ValueError:
             return HTMLResponse("<h1>Invalid choice</h1>", status_code=400)
         gid, now = grant["id"], time.time()
         code = secrets.token_urlsafe(24)
         store.x("INSERT INTO codes VALUES (?,?,?,?,?,?,0)", code, gid, rec.client_id, redirect, params["code_challenge"],
                 now + cfg.code_ttl)
-        return RedirectResponse(redirect + "?" + urlencode({"code": code, "state": state}), 303)
+        # iss (RFC 9207) lets the agent check which authorisation server answered (FAPI 2.0, 5.3.2.2 item 7).
+        return RedirectResponse(redirect + "?" + urlencode({"code": code, "state": state, "iss": cfg.issuer}), 303)
 
     # --------------------------------------------------------------- token
     @r.post("/token")
@@ -176,9 +192,12 @@ def router(bank: Bank) -> APIRouter:
             raise OAuthError("invalid_grant", "redirect_uri does not match")
         if b64u(hashlib.sha256((form.get("code_verifier") or "").encode()).digest()) != row["challenge"]:
             raise OAuthError("invalid_grant", "PKCE code_verifier does not match")
-        store.x("UPDATE codes SET used=1 WHERE code=?", row["code"])
-        store.x("UPDATE grants SET jkt=? WHERE id=?", jkt, row["grant_id"])
-        return token_response(store.grant(row["grant_id"]), jkt)
+        grant = store.grant(row["grant_id"])
+        if grant["jkt"] != jkt:                    # the key named at PAR, which the customer's consent was bound to
+            raise OAuthError("invalid_grant", "the DPoP proof key is not the key this grant was bound to at consent")
+        if store.x("UPDATE codes SET used=1 WHERE code=? AND used=0", row["code"]) != 1:
+            raise OAuthError("invalid_grant", "code is invalid, expired or already used")
+        return token_response(grant, jkt)
 
     def refresh_grant(request: Request, form: dict[str, Any], rec) -> JSONResponse:
         jkt = dpop_jkt(request)
@@ -255,8 +274,10 @@ def router(bank: Bank) -> APIRouter:
             store.x("INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,0,0)", aid, grant["id"], rec.client_id,
                     json.dumps(details[0]), d, message, json.loads(hint["detail"])["_reason"], "pending", now,
                     now + cfg.approval_ttl)
+            # Bind the approval to the immutable payment intent the bank held, not to whatever the agent sends later.
+            intent_id = bank.payments.link_approval(grant["id"], d, aid)
             bank.receipts.append(grant_id=grant["id"], agent=rec.client_id, customer=grant["customer"], action="approval_request",
-                                 outcome="pending", basis="approval_required", approval=aid,
+                                 outcome="pending", basis="approval_required", approval=aid, payment_intent=intent_id,
                                  detail=_payment_summary(details[0]))
             return JSONResponse({"auth_req_id": aid, "expires_in": cfg.approval_ttl, "interval": cfg.ciba_interval})
         except OAuthError as e:

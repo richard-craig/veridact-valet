@@ -1,6 +1,6 @@
 # Veridact Valet: Threat Model
 
-Version 0.1 · 14 November 2026 · For bank security architects, CISOs and risk teams
+Version 0.2 · 15 November 2026 · For bank security architects, CISOs and risk teams
 
 **What this document answers:** for each way an agent reaches a customer's account, what can go wrong, which controls Valet provides, which controls the bank must provide, and what risk remains. Every control is labelled with its real status, so nothing here claims more than the code does.
 
@@ -91,11 +91,15 @@ flowchart LR
 | Consent on the bank's own screen | Customer signs in at the bank's identity platform and approves payees, caps, count and end date | **Built** |
 | Consent evidence | Mandate stores a hash of the exact consent text shown | **Built** |
 | Live mandate check on every call | Paused, revoked or expired mandate fails the next call, not at token expiry | **Built** |
-| Limits enforced by the bank | Saved payees only, per-payment cap, monthly total and count, reserved in one locked step per grant | **Built** |
+| Limits enforced by the bank | Saved payees only and a monthly total, counting money held for unconfirmed payments, checked and held in one locked step per grant | **Built** |
+| Per-payment cap and payment count | | **Built** in the Consent Service (open-banking API); **Designed** for agent mandates (Technical design §3.1) |
 | Beneficiaries can't be added by an agent | `POST /api/beneficiaries` always refused and recorded | **Built** |
 | One-time approvals (CIBA) | An exception becomes one exact action, approved in the bank app, usable once within 5 minutes | **Built** |
 | Approval flood limit | At most 3 pending approvals per grant; each expires in 5 minutes | **Built** |
-| Idempotency | Payments require an idempotency key; a retry returns the original outcome and never pays twice | **Built** |
+| Idempotency, end to end | Payments require an idempotency key; one payment intent per key; the intent id is the idempotency key Valet gives the bank's payments API, so a retry after a crash or a timeout returns the original outcome and never pays twice | **Built** (Technical design §5.1); the bank's own payments adapter is **Bank** |
+| Unknown outcomes | A payment the bank has not confirmed or declined stays held against the limit and is reconciled; a timeout is never treated as a failure | **Built**; scheduling reconciliation is **Bank** |
+| Valet never executes | Valet decides, holds and instructs; the bank's payment system executes, clears and settles | **Built** (one adapter, `core.py`) |
+| Intent evidence in receipts | Each payment receipt says whether it shows a standing mandate or a customer-confirmed payment | **Built** (two tiers); recorded authentication context **Designed** (Technical design §8.1) |
 | Signed, hash-chained receipts | Every decision, allowed or refused; any change or deletion breaks every later link | **Built** |
 | Agent trust can be withdrawn | Registry marks an agent untrusted; all its grants are refused within 60 seconds | **Built** |
 | Versioned mandates | Every receipt names the exact mandate terms in force | **Designed** (Technical design §3.1) |
@@ -108,12 +112,14 @@ flowchart LR
 | Control | What it does | Status |
 |---|---|---|
 | Agent authentication | `private_key_jwt`: the agent signs a client assertion with its own key | **Built** |
-| Pushed Authorization Requests (PAR) | The agent can't tamper with what the customer is shown | **Built** |
+| Pushed Authorization Requests (PAR) | The request reaches the bank on an authenticated back channel, so nothing in the browser can change what the customer is shown. PAR does not sign the request | **Built** |
+| Grant bound to the agent's key at consent | The agent names its key in the pushed request (`dpop_jkt`); the grant and the authorisation code are bound to it before any token exists, in federated and native mode; a native grant with no key is refused | **Built**; verified on Keycloak 26.4.0. Other identity platforms: **Bank** to confirm |
+| Issuer in the authorisation response (RFC 9207) | The agent checks which authorisation server answered | **Built** |
 | PKCE (S256) | An intercepted authorisation code can't be exchanged by anyone else | **Built** |
 | DPoP-bound tokens | Token carries `cnf.jkt`; every call carries a fresh signed proof (method, URL, time, unique id, token hash) | **Built** |
 | Replay protection | Proof `jti` cache; proofs older than 60 seconds rejected | **Built** |
 | Short access tokens | 5 minutes | **Built** |
-| Refresh rotation with reuse detection | Reuse of an old refresh token pauses the grant and tells the customer | **Built** (Valet authorisation server) |
+| Refresh rotation with reuse detection | Reuse of an old refresh token pauses the grant and tells the customer | **Built** (Valet authorisation server). FAPI 2.0 bars rotation for key-bound tokens: open decision (Technical design §14.1) |
 | Pairwise customer identifier | `sub` differs per agent, so agents can't correlate customers | **Built** |
 | Agent identity from a registry | Consent screen shows the operator name from the registry, never from the agent's request | **Built** (static signed list); **Designed** (Veridact) |
 | Explicit delegation claim | RFC 8693 `act` claim naming the agent | **Proposed** |
@@ -179,7 +185,7 @@ A refresh token is a cloakroom ticket. With a confidential client, the ticket on
 
 ### 4.5 Authorisation code interception and consent tampering
 
-**Controls:** PKCE S256 on every flow; exact redirect URIs; PAR on the direct API so the request can't be altered in the browser; consent text hash on the mandate. **Built.**
+**Controls:** PKCE S256 on every flow; exact redirect URIs; PAR on the direct API so the request can't be altered in the browser; consent text hash on the mandate; on the direct API the authorisation code can be redeemed only with a proof from the key the grant was bound to at consent, so a code stolen together with the agent's client credentials is still useless. **Built.**
 
 **Residual risk:** **Low.**
 
@@ -193,6 +199,7 @@ A refresh token is a cloakroom ticket. With a confidential client, the ticket on
 - on the bearer tier, every payment is approved by the customer, who sees payee, amount and the agent's stated reason (**Built**)
 - the gateway tells the assistant to treat transaction text as data; the demo's planted injection is declined (**Built**)
 - receipts record the agent's stated reason, so a misled action is visible and attributable (**Built**; full triggering instruction **Designed**)
+- a payment made under the standing mandate is recorded as `standing_mandate` evidence only: the record shows it was within what the customer delegated, not that the customer asked for it (**Built**)
 
 **Residual risk:** **Medium.** An injected agent can still misreport data to the customer, or ask for an approval that a careless customer accepts. Approval screens must be generated by the bank, show the payee and amount from the bank's own records, and label the agent's reason as the agent's words.
 
@@ -214,7 +221,9 @@ A refresh token is a cloakroom ticket. With a confidential client, the ticket on
 
 ### 4.9 Double payment or replay of an approval
 
-**Controls:** idempotency key on every payment; one-time approvals checked by digest and consumed once; limits reserved in one locked step so parallel payments can't both pass. **Built.**
+**Scenario:** the agent retries after a timeout; Valet crashes after the bank paid but before it recorded success; two requests race; an approval is replayed.
+
+**Controls:** an idempotency key on every payment and one payment intent per key; the intent id is the bank's idempotency key, so a re-sent instruction returns the bank's original result; a timeout leaves the payment `unknown_outcome`, held until the bank answers; one-time approvals are bound to the intent the bank held, checked by digest and consumed in the same locked step as the hold; limits count held money, so parallel payments can't both pass. **Built** and tested against a core that pays without answering. The bank's payments adapter must be idempotent on the intent id: **Bank**.
 
 **Residual risk:** **Low.**
 
@@ -236,9 +245,9 @@ A refresh token is a cloakroom ticket. With a confidential client, the ticket on
 
 **Scenario:** someone, including a bank insider, alters or deletes a receipt; or an agent operator disputes what happened.
 
-**Controls:** receipts are signed with the bank's receipt key and hash-chained, so any change breaks every later link; each API response carries its signed receipt, so the agent operator and the customer hold copies; old keys stay published for verification. **Built.** Keys in an HSM and retention are **Bank**.
+**Controls:** receipts are signed with the bank's receipt key and hash-chained, so any change breaks every later link (**Built**). Each API response carries the receipt's hash, so the agent operator can later prove which record it was given (**Built**); returning the full signed receipt, per-grant chains and published chain heads are **Designed**. Keys in an HSM and retention are **Bank**.
 
-**Residual risk:** **Low.** The agent is never its own witness.
+**Residual risk:** **Low** for tampering. The agent is never its own witness. A receipt is evidence of what was asked, what the rules said and what the bank did; it does not by itself settle what the customer wanted or who is liable (Technical design §8.1).
 
 ### 4.13 Data leaving the bank through the AI platform
 
@@ -313,10 +322,14 @@ How a session stays alive: the assistant receives a refresh token and gets new 5
 | G6 | No egress IP allowlist | J2 | Allowlist the platform's published ranges (Anthropic: `160.79.104.0/21`) as defence in depth | Bank |
 | G7 | Prompt injection can still mislead what the agent tells the customer | All | Bank-generated approval screens; full triggering instruction in receipts | Valet + bank |
 | G8 | Approval fatigue | All | Fraud-pattern monitoring on approval requests | Bank |
-| G9 | Agent identity is the platform, not the individual agent, on J2 | J2 | `act` claim; CIMD allowlist; Veridact accepting CIMD-shaped metadata | Valet |
+| G9 | Agent identity is the platform, not the individual agent, on J2 | J2 | Attribute activity to the platform client and make no per-agent claims until a platform assertion or attestation can be verified; CIMD allowlist; Veridact accepting CIMD-shaped metadata | Valet |
 | G10 | POPIA cross-border transfer; SARB Directive 2 of 2024 | All | Counsel's view | Valet + bank |
 | G11 | Browser agents riding web sessions | Outside Valet | Veridact detection on web channels | Veridact + bank |
 | G12 | Claude Code arrives as a public CIMD client | J2 | Refuse, or hold to view only | Bank |
+| G13 | The PoC's "bank" is a fictional core in the same database, and reconciliation runs on request | All | A real payments adapter, idempotent on the intent id, with scheduled reconciliation and a rule for late arrivals | Bank + Valet |
+| G14 | FAPI 2.0 conformance not run; refresh rotation and the demo's RS256 tokens differ from the profile | J1 | Technical design §14.1 | Valet + bank |
+| G15 | Mandates are not versioned, and approvals do not record the authentication behind them | All | Technical design §3.1, §8.1 | Valet |
+| G16 | The MCP gateway does not use payment intents yet (it is idempotent on the approval id) | J2 | Move the gateway onto payment intents | Valet |
 
 ## 8. Assumptions
 
