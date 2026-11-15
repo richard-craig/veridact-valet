@@ -154,7 +154,7 @@ def test_approval_is_single_use_exact_and_does_not_add_beneficiary():
         assert e.error == "invalid_grant"
         again = await h.kaya.pay(*POWER, "50.00")                   # still a new recipient
         assert again["outcome"] == "approval_pending"
-        assert h.bank.store.spent(h.kaya.session.grant_id) == 0     # approvals do not consume the limit
+        assert h.bank.store.spent(h.kaya.session.grant_id) == 1250_00   # an approved payment counts in the month (§6)
     run(t())
 
 

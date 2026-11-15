@@ -30,6 +30,7 @@ from ..common.crypto import digest, random_id
 from ..common.money import rand, to_cents, to_str
 from . import levels as L
 from .authz import _payment_summary, payment_detail
+from .core import CoreUnavailable, PaymentInstruction
 from .context import Bank
 from .store import month_key
 from .tokens import TokenRejected
@@ -278,19 +279,28 @@ def router(bank: Bank) -> APIRouter:
         if ap["consumed"]:
             return {"outcome": "APPROVED", "payment_ref": ref, "status": "paid", "message": "Already paid (once)."}
         cents = to_cents(detail["amount"]["amount"])
-        acct = store.one("SELECT * FROM accounts WHERE id=? AND customer=?", detail["from"], grant["customer"])
-        if not acct or acct["balance"] < cents:
-            return {"outcome": "DECLINED", "reason_codes": ["INSUFFICIENT_FUNDS"], "message": "Not enough money."}
+        # Valet never executes: it instructs the bank's core banking API, which is idempotent on the id it is given
+        # (here the approval id). A retry, or two calls at once, get the one original result and one debit.
+        try:
+            result = bank.core.execute(PaymentInstruction(
+                payment_intent_id=ref, customer=grant["customer"], from_account=detail["from"],
+                to_name=detail["to"]["name"], to_account=detail["to"]["account"], cents=cents,
+                reference=detail.get("reference", ""), by_agent=grant["client_id"]))
+        except CoreUnavailable:
+            return {"outcome": "APPROVAL_REQUIRED", "payment_ref": ref,
+                    "message": "The bank has not confirmed this payment yet. It may have been paid. "
+                               "Check again with get_payment_status; do not send it again."}
+        if result.status != "paid":
+            return {"outcome": "DECLINED", "reason_codes": ["INSUFFICIENT_FUNDS" if result.reason == "insufficient_funds"
+                                                            else "BANK_DECLINED"], "message": "Not enough money."
+                    if result.reason == "insufficient_funds" else "The bank declined this payment."}
         with store.tx():
             if store.db.execute("UPDATE approvals SET consumed=1 WHERE id=? AND consumed=0", (ref,)).rowcount != 1:
                 return {"outcome": "APPROVED", "payment_ref": ref, "status": "paid", "message": "Already paid (once)."}
-            store.db.execute("UPDATE accounts SET balance=balance-? WHERE id=?", (cents, acct["id"]))
-            store.db.execute("INSERT INTO transactions (account,time,description,amount,by_agent) VALUES (?,?,?,?,?)",
-                             (acct["id"], time.time(), f"To {detail['to']['name']}" +
-                              (f" ({detail['reference']})" if detail.get("reference") else ""), -cents, grant["client_id"]))
             store.db.execute("INSERT INTO ledger VALUES (?,?,?) ON CONFLICT(grant_id,month) DO UPDATE SET "
                              "spent=spent+excluded.spent", (grant["id"], month_key(), cents))
-        rec = receipt(grant, "payment", "allowed", ["CUSTOMER_APPROVED"], approval=ref, detail=_payment_summary(detail))
+        rec = receipt(grant, "payment", "allowed", ["CUSTOMER_APPROVED"], approval=ref, detail=_payment_summary(detail),
+                      bank_payment_id=result.bank_payment_id, intent_evidence="customer_confirmed")
         return {"outcome": "APPROVED", "payment_ref": ref, "status": "paid", "paid": f"{detail['to']['name']} {rand(cents)}",
                 "receipt": rec["hash"]}
 

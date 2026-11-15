@@ -87,7 +87,7 @@ def create_kaya_app(bank_url: str | None = None, public_bank_url: str | None = N
             return RedirectResponse("/", 303)
         state["pending"] = None                                   # one use
         try:
-            await client.finish_connect(code, pending, st)
+            await client.finish_connect(code, pending, st, request.query_params.get("iss"))
         except ValetError as e:
             say("kaya", f"The bank didn't complete the connection ({e.error}). Please try again.", "blocked")
             return RedirectResponse("/", 303)
@@ -111,6 +111,9 @@ def create_kaya_app(bank_url: str | None = None, public_bank_url: str | None = N
                 res = await client.pay("acc_4821", a["to"][0], a["to"][1], a["amount"], a["reference"], a["note"])
                 if res["outcome"] == "paid":
                     say("kaya", f"Paid {res['to']} {R(res['amount'])}. This month: {R(res['spent_this_month'])} of {R(res['monthly_limit'])}.", "ok")
+                elif res["outcome"] == "pending":
+                    say("kaya", "Marula hasn't confirmed that payment yet. It may have gone through, so I won't send it "
+                                "again; I'll check with the same reference.", "held")
                 else:
                     state["approval"] = res["auth_req_id"]
                     say("kaya", f"Marula asked you to approve this first ({res['reason']}). Check your Marula app.", "held")
@@ -128,6 +131,9 @@ def create_kaya_app(bank_url: str | None = None, public_bank_url: str | None = N
                 res = {"outcome": "error", "detail": e.body.get("error_description", e.error)}
             if res["outcome"] == "paid":
                 say("kaya", f"You approved it. Paid {res['to']} {R(res['amount'])}, once.", "ok")
+                state["approval"] = None
+            elif res["outcome"] == "pending":
+                say("kaya", "You approved it, but Marula hasn't confirmed the payment yet. I won't send it again.", "held")
                 state["approval"] = None
             elif res["outcome"] in ("declined", "expired", "error"):
                 say("kaya", f"The payment was {res['outcome']}. I haven't paid anything.", "blocked")

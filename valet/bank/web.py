@@ -90,6 +90,15 @@ def describe(rec: dict[str, Any]) -> dict[str, str]:
     if a == "payment" and o == "allowed":
         return {"title": f"Paid {to}{amt}", "sub": "Approved by you" if b == "approval" else "Within your limit",
                 "kind": "approved" if b == "approval" else "ok"}
+    if a == "payment" and o == "unknown":
+        return {"title": f"Waiting for the bank to confirm {to}{amt}", "sub": "Held against your limit until confirmed",
+                "kind": "held"}
+    if a == "payment" and o == "failed":
+        words = {"insufficient_funds": "Not enough money in the account"}
+        return {"title": f"Not paid: {to}{amt}", "sub": words.get(rec.get("reason", ""), "Declined by the bank"),
+                "kind": "blocked"}
+    if a == "key_binding":
+        return {"title": "Linked to the assistant's key", "sub": "On its first call", "kind": "info"}
     if a == "payment" and o == "held":
         return {"title": f"Asked before paying {to}{amt}", "sub": rec.get("reason", ""), "kind": "held"}
     if a == "approval_request":
@@ -319,6 +328,12 @@ def router(bank) -> APIRouter:
         form = await request.form()
         bank.registry.set_trust(client_id, form.get("trusted") == "1")
         return RedirectResponse("/ops", 303)
+
+    @r.post("/ops/payments/reconcile")
+    def reconcile_payments():
+        """Ask the bank's payment system about payments it has not confirmed or declined. A bank runs this on a
+        schedule; the hold on the customer's limit stays until the bank answers."""
+        return JSONResponse({"reconciled": bank.payments.reconcile()})
 
     @r.get("/receipts/verify")
     def verify_receipts():

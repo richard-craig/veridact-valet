@@ -15,6 +15,7 @@ from valet.agent.sdk import ValetError
 from valet.common.crypto import Key
 from valet.common.dpop import make_proof
 from valet.harness import BANK, Harness
+from valet.testing.flaky_core import install
 
 _C = (sys.stdout.isatty() and not os.environ.get("NO_COLOR")) or os.environ.get("FORCE_COLOR")
 def c(code, s): return f"\033[{code}m{s}\033[0m" if _C else s
@@ -86,6 +87,18 @@ async def main() -> int:
     res = await kaya.pay("acc_4821", "Water & Sanitation", "40021187", "640.00", "Water Oct")
     say("AGENT", f"pays the water bill: {res['outcome']} R{res['amount']} (this month R{res['spent_this_month']} of R{res['monthly_limit']})")
     check("Existing beneficiary inside the limit is paid without a prompt", res["outcome"] == "paid")
+    core = install(h.bank)
+    core.mode = "lost_reply"
+    key = "satellite-tv-oct-2026"
+    lost = await kaya.pay("acc_4821", "Satellite TV", "11902241", "100.00", "TV Oct", idempotency_key=key)
+    say("BANK", f"instructs its payment system, which pays but never answers -> Kaya is told: {lost['outcome']} (not 'failed')")
+    core.mode = "ok"
+    retry = await kaya.pay("acc_4821", "Satellite TV", "11902241", "100.00", "TV Oct", idempotency_key=key)
+    debits = h.bank.store.q("SELECT 1 FROM transactions WHERE description LIKE 'To Satellite TV%'")
+    say("AGENT", f"retries with the same Idempotency-Key: {retry['outcome']}, the same payment ({len(debits)} debit at the bank)")
+    check("A lost answer from the bank's payment system is 'pending', never 'failed'", lost["outcome"] == "pending")
+    check("A retry with the same key completes the same payment and never pays twice",
+          retry["outcome"] == "paid" and retry["payment_intent_id"] == lost["payment_intent_id"] and len(debits) == 1)
 
     step(5, "A new recipient: Thandi decides in her bank app")
     res = await kaya.pay("acc_4821", "City Power", "30087712", "1250.00", "Electricity Oct", "Due on Friday")

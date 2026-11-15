@@ -4,8 +4,12 @@ The Valet agent SDK: what an agent maker integrates once to work with every Vale
     client = ValetClient("kaya", key, bank_url="https://bank.example", redirect_uri="https://kaya.example/callback")
     url, pending = await client.start_connect(level="bill_payer")   # send the customer to `url`
     await client.finish_connect(code, pending)                       # after the bank redirects back
-    result = await client.pay(...)                                   # paid, or approval_pending
+    result = await client.pay(...)                                   # paid, approval_pending, or pending
     result = await client.check_approval(result["auth_req_id"])      # paid once the customer approves
+
+Every payment carries an Idempotency-Key. pay() makes one per payment and keeps it for the approved retry; pass your
+own (idempotency_key=...) and reuse it whenever you retry the same payment, for example after a timeout or a
+"pending" outcome. The bank then continues the same payment and never pays twice.
 
 The customer's password, PIN and OTP never pass through this code.
 """
@@ -78,6 +82,7 @@ class ValetClient:
         self.http = http or httpx.AsyncClient(timeout=10)
         self.session = Session()
         self.approvals: dict[str, dict[str, Any]] = {}      # auth_req_id -> the exact payment
+        self.keys: dict[str, str] = {}                      # auth_req_id -> that payment's Idempotency-Key
 
     # ------------------------------------------------------------ helpers
     def _assertion(self, audience: str | None = None) -> dict[str, str]:
@@ -125,8 +130,9 @@ class ValetClient:
         if level == "bill_payer":
             details.append({"type": "valet_payments", "actions": ["pay_existing_beneficiary"]})
         state = secrets.token_urlsafe(16)
+        # dpop_jkt (RFC 9449 section 10) names this agent's key now, so the bank binds the customer's consent to it.
         req = {"response_type": "code", "redirect_uri": self.redirect_uri, "state": state,
-               "code_challenge": challenge, "code_challenge_method": "S256"}
+               "code_challenge": challenge, "code_challenge_method": "S256", "dpop_jkt": self.key.thumbprint}
         if self.connect_via:
             # The bank's IdP may not support RAR (Keycloak does not): ask for the level; Valet's consent screen,
             # reached through the IdP, builds the exact permission from the customer's choice.
@@ -139,9 +145,13 @@ class ValetClient:
         url = base + "?" + urlencode({"client_id": self.client_id, "request_uri": body["request_uri"]})
         return url, PendingConnect(state, verifier)
 
-    async def finish_connect(self, code: str, pending: PendingConnect, state: str | None = None) -> Session:
+    async def finish_connect(self, code: str, pending: PendingConnect, state: str | None = None,
+                             iss: str | None = None) -> Session:
         if state is not None and state != pending.state:
             raise ValetError(400, {"error": "invalid_state", "error_description": "state does not match"})
+        expected = self.connect_via.issuer if self.connect_via else self.issuer
+        if iss is not None and iss != expected:      # RFC 9207: the answer must come from the server we asked
+            raise ValetError(400, {"error": "invalid_issuer", "error_description": "the response is from another issuer"})
         body = await self._token_request({"grant_type": "authorization_code", "code": code,
                                           "redirect_uri": self.redirect_uri, "code_verifier": pending.verifier})
         self._store_tokens(body)
@@ -158,7 +168,9 @@ class ValetClient:
         self._store_tokens(body)
 
     # ------------------------------------------------------------ calling the bank API
-    async def call(self, method: str, path: str, json_body: Any = None, token: str | None = None) -> dict[str, Any]:
+    async def call(self, method: str, path: str, json_body: Any = None, token: str | None = None,
+                   idempotency_key: str | None = None) -> dict[str, Any]:
+        """Call the bank API. A POST gets a fresh Idempotency-Key unless you pass the one you are retrying with."""
         if token is None and self.session.access_token and time.time() > self.session.expires_at and self.session.refresh_token:
             await self.refresh()
         tok = token or self.session.access_token
@@ -166,6 +178,8 @@ class ValetClient:
             raise ValetError(401, {"error": "not_connected", "error_description": "connect to the bank first"})
         url = self.bank_url + path
         headers = {"Authorization": f"DPoP {tok}", "DPoP": make_proof(self.key, method, url, access_token=tok)}
+        if method.upper() == "POST":
+            headers["Idempotency-Key"] = idempotency_key or new_idempotency_key()
         r = await self.http.request(method, url, json=json_body, headers=headers)
         body = r.json()
         if r.status_code >= 400:
@@ -177,12 +191,16 @@ class ValetClient:
 
     # ------------------------------------------------------------ payments and approvals
     async def pay(self, from_account: str, to_name: str, to_account: str, amount: str, reference: str = "",
-                  note: str = "") -> dict[str, Any]:
-        """Pay inside the grant, or start an approval if the bank asks for one."""
+                  note: str = "", idempotency_key: str | None = None) -> dict[str, Any]:
+        """Pay inside the grant, or start an approval if the bank asks for one.
+
+        Outcomes: "paid"; "approval_pending" (the customer must approve in the bank app); "pending" (the bank has not
+        confirmed yet: call pay() again with the same idempotency_key, returned here, never with a new one)."""
         payment = {"from_account": from_account, "to": {"name": to_name, "account": to_account}, "amount": amount,
                    "reference": reference}
+        key = idempotency_key or new_idempotency_key()
         try:
-            return {"outcome": "paid", **await self.call("POST", "/api/payments", payment)}
+            return _paid(await self.call("POST", "/api/payments", payment, idempotency_key=key), key)
         except ValetError as e:
             if e.error != "approval_required":
                 raise
@@ -191,7 +209,9 @@ class ValetClient:
                                                            "authorization_details": json.dumps(detail),
                                                            "binding_message": note or f"Pay {to_name} {amount}"})
             self.approvals[body["auth_req_id"]] = payment
+            self.keys[body["auth_req_id"]] = key
             return {"outcome": "approval_pending", "auth_req_id": body["auth_req_id"], "reason": e.body.get("error_description"),
+                    "idempotency_key": key, "payment_intent_id": e.body.get("payment_intent_id"),
                     "expires_in": body["expires_in"], "interval": body["interval"]}
 
     async def check_approval(self, auth_req_id: str) -> dict[str, Any]:
@@ -206,6 +226,17 @@ class ValetClient:
             if e.error == "expired_token":
                 return {"outcome": "expired", "auth_req_id": auth_req_id}
             raise
+        # The approved payment is the same payment the bank held: same body, same Idempotency-Key, plus the one-time token.
         once_token = body["access_token"]
-        result = await self.call("POST", "/api/payments", self.approvals[auth_req_id], token=once_token)
-        return {"outcome": "paid", "approved": True, "once_token": once_token, **result}
+        key = self.keys.get(auth_req_id)
+        result = await self.call("POST", "/api/payments", self.approvals[auth_req_id], token=once_token, idempotency_key=key)
+        return {**_paid(result, key), "approved": True, "once_token": once_token}
+
+
+def new_idempotency_key() -> str:
+    return secrets.token_urlsafe(18)
+
+
+def _paid(result: dict[str, Any], key: str | None) -> dict[str, Any]:
+    """200 means paid; 202 means the bank has not confirmed yet (retry with the same key)."""
+    return {"outcome": "paid" if result.get("status") == "paid" else "pending", "idempotency_key": key, **result}
