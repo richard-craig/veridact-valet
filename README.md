@@ -19,10 +19,10 @@ The proof of concept contains:
 
 | Part | What it is |
 |---|---|
-| **Marula Bank** (`valet/bank`) | A fictional bank: a minimal OAuth 2.0 / FAPI 2.0-style authorisation server, a banking API with Valet's checks, Valet's grant service, and the customer's "AI agents" screens. |
+| **Marula Bank** (`valet/bank`) | A fictional bank: a minimal OAuth 2.0 authorisation server (FAPI 2.0-aligned, conformance pending), a banking API with Valet's checks, Valet's grant service and payment intents, a fictional core banking system that executes payments, and the customer's "AI agents" screens. |
 | **Kaya** (`valet/agent`) | A fictional money-assistant agent and the small client SDK it uses. Kaya never sees a password, PIN or OTP. |
-| `demo.py` | A scripted end-to-end run: 13 steps, 22 checks, exits non-zero if any protection fails. |
-| `tests/` | 49 behaviour tests, including the bank's own identity provider in both deployment modes. |
+| `demo.py` | A scripted end-to-end run: 13 steps, 24 checks, exits non-zero if any protection fails. |
+| `tests/` | 93 behaviour tests, including payment safety (retries, crashes, timeouts) and the bank's own identity provider in both deployment modes. |
 | `extensions/keycloak-valet` | A Keycloak extension (Java) for native mode: hands the customer to Valet's consent screen mid-login and puts the Valet grant id in Keycloak's tokens. |
 
 > Marula Bank, Kaya, Kaya Labs and Thandi are fictional, as are all account numbers. This is a demonstration,
@@ -248,15 +248,18 @@ To start again, stop the servers and delete the `data/` folder (or `docker compo
 | The customer, not the agent, decides the scope | The bank builds the grant from the customer's choices on the consent screen, whatever the agent asked for | test |
 | Requests cannot be swapped in the browser | PAR (RFC 9126) plus PKCE S256; `/authorize` refuses anything not pushed first | tests |
 | A stolen token is useless | DPoP (RFC 9449): the token is bound to Kaya's key (`cnf.jkt`); each proof is single-use and bound to the method, URL and token | demo 3, test |
+| A stolen authorisation code is useless, and nobody else can claim the grant | The agent names its key in the pushed request (`dpop_jkt`); the grant is bound to it when the customer consents, in both deployment modes | `test_payments.py`, `test_handoff.py`, Keycloak native run |
+| A retry, a crash or a timeout never pays twice | One payment intent per `Idempotency-Key`; Valet holds the amount and instructs the bank's payment system, idempotent on the intent id; an unanswered payment is `pending` and held, never "failed" | demo 4, `test_payments.py` |
+| Valet never executes a payment | One adapter (`valet/bank/core.py`) to the bank's payments API; the PoC's is a fictional core | `test_payments.py` |
 | Spending stays inside a monthly limit in rands, only to existing beneficiaries | Rich Authorization Requests (RFC 9396) types `valet_accounts` / `valet_payments`; a monthly ledger in SAST | demo 4, 7, test |
 | Anything else needs the customer's approval, in the bank's app | The API returns `approval_required` with the exact action; the agent asks through CIBA (poll mode); the bank only accepts actions it offered | demo 5, test |
-| An approval covers one payment, exactly as shown | Single-use, 5-minute, digest-bound `valet_payment_once` token; it neither adds a beneficiary nor uses the limit | demo 6, test |
+| An approval covers one payment, exactly as shown | Single-use, 5-minute, digest-bound `valet_payment_once` token that can only finish the payment the bank held; it never adds a beneficiary, and it counts towards the month's total | demo 6, test |
 | Agents can never add beneficiaries | Hard refusal in the API, recorded | demo 8, test |
 | Pause, resume and disconnect are immediate | Grant status is checked on every API call, not only at token issue; pausing cancels pending approvals | demo 9, 12, test |
 | A copied refresh token is caught | Rotation with reuse detection; reuse pauses the grant | demo 10, test |
 | The bank or Veridact can stop an operator everywhere at once | Registry trust is checked on every call | demo 11, test |
 | Every decision can be proven later | Hash-chained, ES256-signed receipts at the bank; tampering is detected | demo 13, test |
-| The bank's IdP can issue the agent's tokens while Valet keeps the rules; forged consent results are refused | Keycloak extension: signed ticket and result with nonce; grant id in tokens; grant bound to the agent's DPoP key | `test_handoff.py`, Keycloak native run |
+| The bank's IdP can issue the agent's tokens while Valet keeps the rules; forged consent results are refused | Keycloak extension: signed ticket and result with nonce; grant id in tokens; grant bound to the agent's DPoP key at consent | `test_handoff.py`, Keycloak native run |
 | The bank's own IdP signs customers in, and consent and approvals need a fresh sign-in | OIDC relying party (code + PKCE, nonce, JWKS-checked ID token); `max_age=0` step-up with `auth_time` checked | `test_idps.py`, Keycloak run |
 | Tokens from the bank's own authorisation server get exactly the same checks | Verified with the issuer's keys; consent is the grant registered with Valet, so tokens cannot widen it | `test_idps.py` |
 
@@ -335,12 +338,16 @@ This PoC shows the protocol and the customer experience. It leaves out what a ba
   or secure enclave (the agent operator).
 - **Scale and durability.** SQLite and one process. Grant status, replay caches and ledgers need shared,
   highly available storage.
+- **A real payment system.** Valet never executes a payment; it instructs the bank's payments API. Here that is a
+  fictional core in the same database (`valet/bank/core.py`). A bank writes an adapter that is idempotent on the
+  payment intent id and runs reconciliation on a schedule (design section 5.1).
 - **The real registry.** `StaticRegistry` stands in for Veridact.
 - **IdP hooks for native mode beyond Keycloak.** Keycloak's is built and run; Auth0's and PingFederate's are not.
   The Keycloak extension's own limits are in its README.
 - **Transport.** No TLS here; FAPI 2.0 requires it, and the bank would usually add mTLS or a gateway.
-- **Full FAPI 2.0 conformance.** The PoC follows the FAPI 2.0 pattern (PAR, PKCE, DPoP, private_key_jwt) but has
-  not been through the OpenID conformance suite.
+- **Full FAPI 2.0 conformance.** The direct API is FAPI 2.0-aligned (PAR, PKCE, DPoP, private_key_jwt, code binding
+  to the agent's key) with conformance pending: it has not been through the OpenID conformance suite, and the known
+  differences are listed in the design (section 14.1).
 
 A bank does not have to adopt this code as it stands. It can run the reference components, or implement the
 Valet profile on its own platform and prove it with the tests.
