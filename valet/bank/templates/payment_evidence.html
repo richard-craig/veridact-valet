@@ -1,0 +1,62 @@
+{% extends "base.html" %}{% block title %}{{ p.headline }} · {{ bank_name }}{% endblock %}
+{% block body %}
+<a href="/app/agents/{{ g.id }}" style="color:var(--brand);font-weight:700;text-decoration:none">← {{ agent.name }}</a>
+<div style="display:flex;flex-direction:column;gap:6px"><span class="sub">Payment record</span><b style="font-size:20px">{{ p.headline }}</b><span class="amount">{{ p.amount }}</span>
+<span class="pill {{ 'active' if p.paid else ('paused' if p.state in ('approval_required','reserved','executing','unknown_outcome') else 'revoked') }}" style="align-self:flex-start">{{ 'Paid' if p.paid else ('Not paid' if p.state in ('failed','approval_required') else 'Waiting for the bank') }}</span></div>
+
+<h2>The payment</h2>
+<div class="card" style="display:flex;flex-direction:column;gap:8px">
+<div class="row"><span>To</span><span>{{ p.to }}</span></div>
+<div class="row"><span>To account</span><span>{{ p.to_account }}</span></div>
+<div class="row"><span>From</span><span>{{ p.from }}</span></div>
+{% if p.reference %}<div class="row"><span>Reference</span><span>{{ p.reference }}</span></div>{% endif %}
+<div class="row"><span>Asked for</span><span>{{ p.asked_at }}</span></div>
+{% if p.settled_at %}<div class="row"><span>{{ 'Paid' if p.paid else 'Closed' }}</span><span>{{ p.settled_at }}</span></div>{% endif %}
+</div>
+
+<h2>1. Who asked</h2>
+<div class="card" style="display:flex;flex-direction:column;gap:8px">
+<div class="agentrow"><span class="av">{{ agent.name[0] }}</span><div style="flex:1"><b>{{ agent.name }}</b><div class="{{ 'ver' if g.trusted else 'unver' }}">{{ 'Verified' if g.trusted else 'No longer trusted' }} · {{ agent.operator }}</div></div></div>
+<div class="sub">{{ p.channel }}</div>
+{% if p.key %}<div class="row"><span>Agent key</span><span class="mono">{{ p.key }}…</span></div>{% endif %}
+</div>
+
+<h2>2. What you allowed</h2>
+<div class="card" style="display:flex;flex-direction:column;gap:8px">
+<div style="font-size:14px">{{ p.mandate }}</div>
+{% if p.connected_at %}<div class="row"><span>You agreed on</span><span>{{ p.connected_at }}</span></div>{% endif %}
+{% if p.consent_hash %}<div class="row"><span>Consent record</span><span class="mono">{{ p.consent_hash }}…</span></div>{% endif %}
+</div>
+
+<h2>3. Whose decision</h2>
+<div class="card" style="display:flex;flex-direction:column;gap:8px">
+<b>{{ p.decision.title }}</b><div style="font-size:14px">{{ p.decision.text }}</div>
+{% if p.why and p.decision.kind != 'ok' %}<div class="sub"><b>Why the bank asked you:</b> {{ p.why }}.</div>{% endif %}
+{% if p.note %}<div class="sub">{{ agent.name }}'s note at the time (written by the agent, not the bank): “{{ p.note }}”</div>{% endif %}
+{% if p.instruction and not p.note %}<div class="sub">The reason {{ agent.name }} gave (written by the assistant, not the bank): “{{ p.instruction }}”</div>{% endif %}
+</div>
+
+<h2>4. What the bank did</h2>
+<div class="card" style="display:flex;flex-direction:column;gap:8px">
+<div style="font-size:14px">{{ p.did }}</div>
+{% if p.bank_payment_id %}<div class="row"><span>Bank payment reference</span><span class="mono">{{ p.bank_payment_id }}</span></div>{% endif %}
+<div class="row"><span>Payment record</span><span class="mono">{{ p.id }}</span></div>
+<div class="row"><span>Agent's request reference</span><span class="mono">{{ p.request_ref }}</span></div>
+</div>
+
+<h2>Step by step</h2>
+<div class="list">
+{% for it in p.timeline %}<div class="item {{ it.kind }}"><span class="dot"></span><div style="flex:1"><b>{{ it.title }}</b><div class="sub">{{ it.sub }}{% if it.sub %} · {% endif %}{{ it.when }}</div><div class="mono">receipt {{ it.hash }}…</div></div></div>
+{% endfor %}</div>
+
+{% if p.nearby %}<h2>Also stopped or held that day</h2>
+<div class="list">
+{% for it in p.nearby %}<div class="item {{ it.kind }}"><span class="dot"></span><div style="flex:1"><b>{{ it.title }}</b><div class="sub">{{ it.sub }}{% if it.sub %} · {% endif %}{{ it.when }}</div></div></div>
+{% endfor %}</div>{% endif %}
+
+<div class="card" style="background:var(--bg);border:0;font-size:13px">
+{% if p.chain_ok %}<b>Record intact.</b> The {{ p.records }} records above are signed by {{ bank_name }} and chained together, and the chain checks out, so none of them has been changed since it was written.{% else %}<b>Record check failed.</b> The bank's record chain does not verify. Contact the bank.{% endif %}
+{% if p.evidence %}<br><br>{{ p.evidence }}{% endif %}
+<br><br>This page shows what was asked, what your settings allowed and what the bank did. It does not by itself decide a dispute.
+</div>
+{% endblock %}

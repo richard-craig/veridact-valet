@@ -350,3 +350,53 @@ def test_login_page_and_bad_password():
         r = await h.browser.post("/login", data={"username": "thandi", "password": "wrong", "next": "/app"})
         assert "/app" not in r.headers.get("location", "")
     run(t())
+
+
+def test_payment_evidence_page_shows_who_asked_what_was_allowed_whose_decision_and_what_the_bank_did():
+    async def t():
+        h = Harness()
+        gid = await h.connect()
+        inside = await h.kaya.pay(*WATER, "640.00", "Oct")
+        held = await h.kaya.pay(*POWER, "1250.00", "Electricity", note="Monthly electricity")
+        await h.decide(held["auth_req_id"])
+        paid = await h.kaya.check_approval(held["auth_req_id"])
+        over = await h.kaya.pay(*WATER, "900.00")                       # over the limit now: held, never approved
+
+        # the activity list links each payment line to its evidence page
+        activity = (await h.browser.get(f"/app/agents/{gid}")).text
+        for res in (inside, paid, over):
+            assert f"/app/agents/{gid}/payments/{res['payment_intent_id']}" in activity
+
+        page = (await h.browser.get(f"/app/agents/{gid}/payments/{paid['payment_intent_id']}")).text
+        assert "Paid City Power" in page and "R1,250.00" in page
+        assert "Kaya" in page and "Verified" in page                                     # 1. who asked
+        assert h.bank.store.grant(gid)["jkt"][:16] in page
+        assert "Bill payer: pay existing beneficiaries" in page                          # 2. what was allowed
+        assert "You approved this exact payment" in page and "after signing in again" in page   # 3. whose decision
+        assert "not a saved beneficiary" in page and "Monthly electricity" in page
+        assert paid["bank_payment_id"] in page and held["idempotency_key"] in page       # 4. what the bank did
+        assert "Asked before paying City Power" in page and "You approved City Power" in page  # step by step
+        assert "Record intact" in page and "Customer confirmed" in page
+        assert "does not by itself decide a dispute" in page
+
+        page = (await h.browser.get(f"/app/agents/{gid}/payments/{inside['payment_intent_id']}")).text
+        assert "Inside your standing limit" in page and "did not ask you to approve it" in page
+        assert inside["bank_payment_id"] in page and "Standing mandate" in page
+
+        page = (await h.browser.get(f"/app/agents/{gid}/payments/{over['payment_intent_id']}")).text
+        assert "Not paid: Water" in page and "Nothing was paid" in page and "Bank payment reference" not in page
+    run(t())
+
+
+def test_payment_evidence_is_only_for_the_customer_who_owns_the_grant():
+    async def t():
+        h = Harness()
+        gid = await h.connect()
+        res = await h.kaya.pay(*WATER, "640.00")
+        url = f"/app/agents/{gid}/payments/{res['payment_intent_id']}"
+        assert (await h.browser.get(f"/app/agents/{gid}/payments/pi_nope")).status_code == 404
+        assert (await h.browser.get(f"/app/agents/g_other/payments/{res['payment_intent_id']}")).status_code == 404
+        await h.browser.post("/logout")
+        r = await h.browser.get(url)
+        assert r.status_code == 303 and "/login" in r.headers["location"]
+    run(t())

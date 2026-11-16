@@ -65,6 +65,9 @@ class Payments:
     def by_key(self, grant_id: str, key: str) -> dict[str, Any] | None:
         return self._view(self.store.one("SELECT * FROM payment_intents WHERE grant_id=? AND idem_key=?", grant_id, key))
 
+    def for_grant(self, grant_id: str) -> list[dict[str, Any]]:
+        return [self._view(r) for r in self.store.q("SELECT * FROM payment_intents WHERE grant_id=? ORDER BY created", grant_id)]
+
     def by_approval(self, grant_id: str, approval_id: str) -> dict[str, Any] | None:
         return self._view(self.store.one("SELECT * FROM payment_intents WHERE grant_id=? AND approval=?", grant_id, approval_id))
 

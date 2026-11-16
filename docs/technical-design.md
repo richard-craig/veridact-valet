@@ -372,6 +372,8 @@ Access tokens last 5 minutes, but that is not the safety mechanism: the live gra
 
 The bank decides which tier each kind of payment needs: the stronger tiers for new payees, high amounts and unusual patterns. Receipts and dispute screens show the tier.
 
+**The payment evidence page.** In the bank app, tapping a payment in an agent's activity opens one page with everything the bank holds about it, in plain language: who asked (the agent, its operator, its key), what the customer allowed (the mandate and the consent record), whose decision it was (inside the standing limit, or approved by the customer, with what the bank asked and the agent's note), and what the bank did (the outcome and the bank's own payment reference). It lists every signed record for that payment in order, anything else stopped or held that day, and whether the record chain verifies. It reads what is already recorded and changes nothing about how payments work. Built for the customer; a staff-side view of the same data for dispute handlers is not built.
+
 Four kinds of evidence stay distinguishable in every record: **authentication** (who called, with which key), **mandate** (what was delegated, and the consent behind it), **customer approval** (for this exact payment, if any) and **execution** (what the bank's payment system did, by its own payment id). Liability between the customer, the bank and the agent operator is a matter for the bank's terms, the operator agreement and the law; the receipts are the evidence those rely on.
 
 ## 9. Agent identity and the Veridact interface
@@ -439,7 +441,7 @@ Agent ecosystems identify an agent by an HTTPS URL serving its metadata and sign
 | POST /handoff/decision | Browser | The same ticket, single use | Creates the grant from the customer's choice under the bank's policy and binds it to the ticket's `dpop_jkt`, then auto-posts a signed result (grant id or deny, same nonce) back into the IdP's login |
 | DELETE /internal/grants/{id} | The bank's IdP | Shared secret in the PoC; mTLS in production | Native mode: the customer disconnected the agent in the IdP's own account pages; revokes the grant and writes a receipt |
 
-Customer and operations pages on the bank: `GET/POST /login`, `POST /logout`, `GET /app`, `GET /app/agents/{grant}`, `POST /app/agents/{grant}/{pause|resume|revoke}`, `POST /app/pause-all`, `GET /app/approvals`, `GET/POST /app/approvals/{id}`, `GET /ops`, `POST /ops/agents/{client_id}/trust`, `POST /ops/payments/reconcile`, `GET /receipts/verify`.
+Customer and operations pages on the bank: `GET/POST /login`, `POST /logout`, `GET /app`, `GET /app/agents/{grant}`, `GET /app/agents/{grant}/payments/{payment_intent_id}` (the payment evidence page, §8.1), `POST /app/agents/{grant}/{pause|resume|revoke}`, `POST /app/pause-all`, `GET /app/approvals`, `GET/POST /app/approvals/{id}`, `GET /ops`, `POST /ops/agents/{client_id}/trust`, `POST /ops/payments/reconcile`, `GET /receipts/verify`.
 
 **A payment inside the grant:**
 
@@ -573,7 +575,7 @@ The extension uses Keycloak's internal authenticator and protocol-mapper SPIs, a
 ```bash
 pip install -r requirements.txt
 python demo.py          # scripted end-to-end run: 13 steps, 24 checks
-python -m pytest -q     # 99 behaviour tests, including payment safety, both identity-provider modes and the consent hand-off
+python -m pytest -q     # 102 behaviour tests, including payment safety, both identity-provider modes and the consent hand-off
 python run.py           # clickable: Kaya http://localhost:8001, Marula Bank http://localhost:8000 (thandi / demo)
 
 docker compose up --build        # the same clickable demo in containers
@@ -603,7 +605,7 @@ python deploy/keycloak/setup_native.py
 | 12 | Thandi disconnects Kaya | Immediate and final |
 | 13 | A receipt is altered | The signed hash chain shows exactly where |
 
-**Verified on 16 November 2026 (version 0.5):** 24 of 24 checks and 99 of 99 tests passed on Python 3.11 and 3.13, and the native-mode preflight passed 38 of 38 against Keycloak 26.4.0, including a payment through the MCP gateway recorded as a payment intent. As on 15 November, the services were started directly rather than in containers.
+**Verified on 16 November 2026 (version 0.5):** 24 of 24 checks and 102 of 102 tests passed on Python 3.11 and 3.13 (99 before the payment evidence page was added), and the native-mode preflight passed 38 of 38 against Keycloak 26.4.0, including a payment through the MCP gateway recorded as a payment intent. As on 15 November, the services were started directly rather than in containers.
 
 **Verified on 15 November 2026 (version 0.4):** 24 of 24 checks and 93 of 93 tests passed on Python 3.11 (a clean virtual environment built only from `requirements.txt`) and 3.13. Native mode was run end to end against a real **Keycloak 26.4.0** with the rebuilt extension (compiled with `javac` against Keycloak's own libraries): `scripts/preflight.py` passed 38 of 38 checks across Kaya, the Consent Service app and the MCP gateway, with binding at first use switched off, plus the key-binding results in §12. That run started the services directly rather than in containers; the Docker images were not rebuilt.
 
