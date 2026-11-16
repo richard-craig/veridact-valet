@@ -201,7 +201,7 @@ def test_pause_is_immediate_and_cancels_pending_approvals():
         res = await h.kaya.pay(*POWER, "100.00")
         await h.grant_action(gid, "pause")
         assert (await err(h.kaya.accounts())).error == "grant_paused"
-        assert (await h.kaya.check_approval(res["auth_req_id"]))["outcome"] == "declined"
+        assert (await h.kaya.check_approval(res["auth_req_id"]))["outcome"] == "cancelled"
         await h.grant_action(gid, "resume")
         assert await h.kaya.accounts()
     run(t())

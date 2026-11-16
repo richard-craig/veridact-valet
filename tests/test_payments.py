@@ -204,7 +204,7 @@ def test_valet_crashes_between_holding_the_money_and_recording_the_answer():
 
 def test_reconciliation_settles_what_the_bank_knows_and_releases_only_what_it_never_received():
     async def t():
-        h = Harness(reconcile_after=0, abandon_after=3600)
+        h = Harness(reconcile_after=0, escalate_after=3600)
         gid = await h.connect()
         core = install(h.bank)
         core.mode = "lost_reply"
@@ -219,12 +219,13 @@ def test_reconciliation_settles_what_the_bank_knows_and_releases_only_what_it_ne
         assert r.json()["reconciled"] == [{"payment_intent_id": paid["payment_intent_id"], "was": "unknown_outcome",
                                            "now": "confirmed"}]
         assert h.bank.store.spent(gid) == 640_00 and h.bank.payments.reserved(gid) == 300_00   # the other stays held
-        h.bank.payments.abandon_after = 0                              # the bank has had long enough to say so
+        h.bank.payments.escalate_after = 0                             # the bank has had long enough: cancel-or-confirm
         assert h.bank.payments.reconcile() == [{"payment_intent_id": lost["payment_intent_id"], "was": "unknown_outcome",
-                                                "now": "failed"}]
+                                                "now": "cancelled"}]   # the bank tombstoned what it never received
         assert h.bank.payments.reserved(gid) == 0 and balance(h) == OPENING - 640_00
         e = await err(h.kaya.call("POST", "/api/payments", body(SCHOOL, "300.00", ""), idempotency_key=lost["idempotency_key"]))
-        assert e.error == "payment_declined"                           # that intent is over; a new payment needs a new key
+        assert e.error == "payment_cancelled"                          # that intent is over; a new payment needs a new key
+        assert core.cancels == 1
     run(t())
 
 

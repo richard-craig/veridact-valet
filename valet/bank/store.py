@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, a
     amount INTEGER, by_agent TEXT);
 CREATE TABLE IF NOT EXISTS par (request_uri TEXT PRIMARY KEY, client_id TEXT, params TEXT, expires REAL, used INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, customer TEXT, client_id TEXT, level TEXT, details TEXT,
-    status TEXT, created REAL, expires REAL, jkt TEXT, consent_hash TEXT, sub TEXT);
+    status TEXT, created REAL, expires REAL, jkt TEXT, consent_hash TEXT, sub TEXT, version INTEGER DEFAULT 1,
+    issuer TEXT);
 CREATE TABLE IF NOT EXISTS codes (code TEXT PRIMARY KEY, grant_id TEXT, client_id TEXT, redirect_uri TEXT,
     challenge TEXT, expires REAL, used INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS refresh (hash TEXT PRIMARY KEY, grant_id TEXT, jkt TEXT, used INTEGER DEFAULT 0, created REAL);
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, grant_id TEXT, client
 CREATE TABLE IF NOT EXISTS ledger (grant_id TEXT, month TEXT, spent INTEGER, PRIMARY KEY (grant_id, month));
 CREATE TABLE IF NOT EXISTS receipts (seq INTEGER PRIMARY KEY, record TEXT, hash TEXT, signature TEXT);
 CREATE TABLE IF NOT EXISTS jti (jti TEXT PRIMARY KEY, expires REAL);
+CREATE TABLE IF NOT EXISTS denylist (kind TEXT, value TEXT, reason TEXT, added REAL, PRIMARY KEY (kind, value));
 """
 
 
@@ -52,6 +54,10 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         self.db.executescript(SCHEMA)
+        cols = {c["name"] for c in self.db.execute("PRAGMA table_info(grants)")}
+        for col, ddl in (("version", "INTEGER DEFAULT 1"), ("issuer", "TEXT")):   # databases from earlier versions
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE grants ADD COLUMN {col} {ddl}")
 
     # ------------------------------------------------------------- basics
     def q(self, sql: str, *args: Any) -> list[sqlite3.Row]:
@@ -143,7 +149,11 @@ class Store:
     def set_status(self, grant_id: str, status: str) -> None:
         self.x("UPDATE grants SET status=? WHERE id=?", status, grant_id)
         if status in ("paused", "revoked"):
-            self.x("UPDATE approvals SET status='cancelled' WHERE grant_id=? AND status='pending'", grant_id)
+            # Pause is the panic button: the customer's latest action wins. Approvals waiting for an answer, and
+            # approvals given but not yet used, are cancelled; after resume the agent must ask again.
+            self.x("UPDATE approvals SET status='cancelled' WHERE grant_id=? AND (status='pending' OR "
+                   "(status='approved' AND consumed=0))", grant_id)
+            self.x("DELETE FROM hints WHERE grant_id=?", grant_id)   # actions offered for the IdP's own approvals
         if status == "revoked":
             self.x("DELETE FROM refresh WHERE grant_id=?", grant_id)
 

@@ -108,6 +108,22 @@ def _describe_connector(tool: str, outcome: str, to: str, amt: str, rec: dict[st
     return {"title": title + (amt if tool == "pay_existing_payee" else ""), "sub": sub_, "kind": "blocked"}
 
 
+def stop_note(action: str, payments: dict[str, int]) -> str:
+    """What pausing or disconnecting did to payments in flight, in the customer's words."""
+    if action == "resume":
+        return "Payments you approved before the pause were cancelled; the assistant must ask again"
+    n, done, cancelled = payments.get("with_bank", 0), payments.get("already_paid", 0), payments.get("cancelled", 0)
+    parts = []
+    if n:
+        parts.append(f"{'One payment was' if n == 1 else f'{n} payments were'} already with the bank and may still complete")
+    if done:
+        parts.append(f"{'One payment had' if done == 1 else f'{done} payments had'} already been made")
+    if cancelled:
+        parts.append(f"{'One payment' if cancelled == 1 else f'{cancelled} payments'} not yet made "
+                     f"{'was' if cancelled == 1 else 'were'} cancelled")
+    return "; ".join(parts)
+
+
 def when(value: Any) -> str:
     """A receipt time (ISO text) or a stored timestamp, as the customer reads it: 16 Nov 2026, 10:42."""
     t = datetime.fromisoformat(value) if isinstance(value, str) else datetime.fromtimestamp(value, SAST)
@@ -139,6 +155,12 @@ def describe(rec: dict[str, Any]) -> dict[str, str]:
                 "kind": "blocked"}
     if a == "refresh" and o == "retried":
         return {"title": "Assistant reconnected after a lost reply", "sub": "Same key; nothing changed", "kind": "info"}
+    if a == "payment" and o == "cancelled":
+        return {"title": f"Cancelled: {to}{amt}", "sub": "Stopped before the bank accepted it · nothing was paid",
+                "kind": "blocked"}
+    if a == "payment" and o == "escalated":
+        return {"title": f"Still waiting for the bank: {to}{amt}", "sub": "Passed to the bank's operations team · "
+                "held against your limit", "kind": "held"}
     if a == "key_binding":
         return {"title": "Linked to the assistant's key", "sub": "On its first call", "kind": "info"}
     if a == "payment" and o == "held":
@@ -149,7 +171,7 @@ def describe(rec: dict[str, Any]) -> dict[str, str]:
         return {"title": f"You {rec.get('outcome')} {to}{amt}", "sub": "In your Marula app", "kind": "info"}
     if a in ("pause", "resume", "revoke", "pause_all"):
         words = {"pause": "Paused", "resume": "Resumed", "revoke": "Disconnected", "pause_all": "Paused (pause all)"}
-        return {"title": f"{words[a]} by you", "sub": "", "kind": "info"}
+        return {"title": f"{words[a]} by you", "sub": stop_note(a, rec.get("payments") or {}), "kind": "info"}
     if a == "read_balances" and o == "allowed":
         return {"title": "Checked balances", "sub": "Within your limit", "kind": "ok"}
     if a == "read_transactions" and o == "allowed":
@@ -364,9 +386,11 @@ def router(bank) -> APIRouter:
             return HTMLResponse("Not allowed", status_code=403)
         if g["status"] in ("revoked", "expired"):
             return RedirectResponse("/app", 303)
-        store.set_status(gid, {"pause": "paused", "resume": "active", "revoke": "revoked"}[action])
+        stopped = bank.stop_grant(gid, {"pause": "paused", "resume": "active", "revoke": "revoked"}[action],
+                                  {"pause": "the customer paused the agent", "revoke": "the customer disconnected the agent",
+                                   "resume": ""}[action])
         bank.receipts.append(grant_id=gid, agent=g["client_id"], customer=cus["id"], action=action, outcome="done",
-                             basis="customer")
+                             basis="customer", payments=stopped)
         return RedirectResponse("/app" if action == "revoke" else f"/app/agents/{gid}", 303)
 
     @r.post("/app/pause-all")
@@ -379,9 +403,9 @@ def router(bank) -> APIRouter:
             return HTMLResponse("Not allowed", status_code=403)
         for g in store.grants_for(cus["id"]):
             if g["status"] == "active":
-                store.set_status(g["id"], "paused")
+                stopped = bank.stop_grant(g["id"], "paused", "the customer paused all agents")
                 bank.receipts.append(grant_id=g["id"], agent=g["client_id"], customer=cus["id"], action="pause_all",
-                                     outcome="done", basis="customer")
+                                     outcome="done", basis="customer", payments=stopped)
         return RedirectResponse("/app", 303)
 
     # ------------------------------------------------------------ approvals
@@ -452,6 +476,27 @@ def router(bank) -> APIRouter:
         form = await request.form()
         bank.registry.set_trust(client_id, form.get("trusted") == "1")
         return RedirectResponse("/ops", 303)
+
+    @r.get("/ops/payments/escalated")
+    def escalated_payments():
+        """The operations queue `payments-unknown-outcome`: payments the bank has neither settled nor tombstoned.
+        Each is still held against the customer's limit. The bank sets the SLA for working this queue."""
+        return JSONResponse({"queue": "payments-unknown-outcome", "items": bank.payments.escalated()})
+
+    @r.post("/ops/denylist")
+    async def add_to_denylist(request: Request):
+        """The bank stops an agent, an operator or a key at once, on every node, without waiting for the registry."""
+        body = await request.json()
+        try:
+            bank.deny(str(body.get("kind", "")), str(body.get("value", "")), str(body.get("reason", ""))[:200])
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"denied": {"kind": body["kind"], "value": body["value"]}})
+
+    @r.delete("/ops/denylist/{kind}/{value}")
+    def remove_from_denylist(kind: str, value: str):
+        bank.undeny(kind, value)
+        return JSONResponse({"removed": {"kind": kind, "value": value}})
 
     @r.post("/ops/payments/reconcile")
     def reconcile_payments():

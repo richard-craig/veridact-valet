@@ -165,7 +165,8 @@ def router(bank: Bank) -> APIRouter:
             try:
                 g = create_grant(bank, cus, agent, str(form.get("level", "view_only")), str(form.get("account", "")),
                                  int(form.get("monthly") or 2_000_00), via="bank identity provider (consent hand-off)",
-                                 jkt=str(t.get("dpop_jkt") or "") or None)
+                                 jkt=str(t.get("dpop_jkt") or "") or None,
+                                 issuer=bank.native_issuer(str(t.get("token_issuer") or "") or None))
             except ValueError as e:
                 return error_page(request, f"That choice isn't possible: {e}.")
             result |= {"decision": "allow", "grant_id": g["id"]}

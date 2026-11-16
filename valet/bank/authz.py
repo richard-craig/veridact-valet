@@ -145,7 +145,7 @@ def router(bank: Bank) -> APIRouter:
         try:
             grant = create_grant(bank, cus, rec, form.get("level", "view_only"), form.get("account", ""),
                                  int(form.get("monthly") or 2_000_00), via="Valet consent screen",
-                                 jkt=params["dpop_jkt"])
+                                 jkt=params["dpop_jkt"], issuer=cfg.issuer)
         except ValueError:
             return HTMLResponse("<h1>Invalid choice</h1>", status_code=400)
         gid, now = grant["id"], time.time()
@@ -212,7 +212,7 @@ def router(bank: Bank) -> APIRouter:
             # customer.
             if not (mine and time.time() - row["used"] <= cfg.refresh_retry_window):
                 if grant["status"] == "active":
-                    store.set_status(grant["id"], "paused")
+                    bank.stop_grant(grant["id"], "paused", "a copied refresh token was used")
                 bank.receipts.append(grant_id=grant["id"], agent=grant["client_id"], customer=grant["customer"],
                                      action="refresh", outcome="refused", basis="refused",
                                      reason="refresh token reused; grant paused for safety")

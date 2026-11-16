@@ -1,10 +1,10 @@
 # Veridact Valet: Technical Design
 
-Version 0.5 · 16 November 2026
+Version 0.6 · 16 November 2026
 
 ## 1. Scope and key decisions
 
-**Valet is an open-source profile of OAuth 2.0 standards, with reference code, that a bank deploys and runs itself on the identity platform it already has: the agent never holds a customer credential, every grant is bound to the agent's key when the customer consents, every grant is a precise, expiring permission, every exception goes to the customer in the bank's app, and Valet decides and records but never executes a payment.** This document specifies the design and the proof of concept (PoC) that implements it. The product case is in the [README](../README.md); what Valet is, where it fits next to open banking and the identity platform, and the questions banks ask are in [Where Valet fits](where-valet-fits.md).
+**Valet is an open-source profile of OAuth 2.0 standards, with reference code, that a bank deploys and runs itself on the identity platform it already has: the agent never holds a customer credential, every grant is bound to the agent's key when the customer consents, every grant is a precise, expiring permission, every exception goes to the customer in the bank's app, and Valet is an authorisation and transaction-control layer that initiates execution through a bank-controlled payment API: it never executes a payment itself.** This document specifies the design and the proof of concept (PoC) that implements it. The product case is in the [README](../README.md); what Valet is, where it fits next to open banking and the identity platform, and the questions banks ask are in [Where Valet fits](where-valet-fits.md).
 
 | Decision | Choice | Why |
 | --- | --- | --- |
@@ -14,8 +14,8 @@ Version 0.5 · 16 November 2026
 | Token binding | DPoP (RFC 9449) on every token on the direct API. The agent names its key in the pushed request (`dpop_jkt`), so the grant and the authorisation code are bound to it before any token exists (§4, §12). Assistant platforms that cannot send DPoP yet get bearer-tier ceilings (§14) | A stolen token or authorisation code is useless without the agent’s private key |
 | Exceptions | OpenID CIBA, poll mode, with a one-time `valet_payment_once` authorisation detail | Approval happens in the bank app; the agent only waits |
 | Where limits live | The bank’s resource server, in its own ledger | Amounts and payees never leave the bank |
-| Payments | Valet decides, holds the amount and instructs; the bank's payments API executes. One durable payment intent per request, idempotent end to end (§5.1) | A retry, a crash or a timeout can never pay twice, and Valet stays out of the money path |
-| Agent identity | A pluggable `AgentRegistry`; the PoC uses a static signed list; production uses Veridact. Vendor-hosted client metadata (CIMD) accepted only from an allowlist; never Dynamic Client Registration (§9.1, proposed) | Keeps Valet usable before Veridact is live; no anonymous clients |
+| Payments | Valet authorises, holds headroom on the mandate and initiates one idempotent instruction through the bank-controlled payments API, which executes. One durable payment intent per request; a hold is released only when the bank confirms, declines or tombstones the instruction (cancel-or-confirm, §5.1) | A retry, a crash, a timeout or a pause can never pay twice or lose track of money, and Valet stays out of the money path |
+| Agent identity | A pluggable `AgentRegistry`; the PoC uses a static signed list; production uses Veridact. Vendor-hosted client metadata (CIMD) accepted only from an allowlist; never Dynamic Client Registration (§9.2, proposed) | Keeps Valet usable before Veridact is live; no anonymous clients |
 | Who runs it | The bank, in its own environment. Valet is a project, not a hosted service | Banks keep control, data and keys; no customer data leaves the bank |
 | Identity provider | The bank's own. Any OpenID Connect provider signs customers in; platforms with PAR, RAR and DPoP can also issue the agent's tokens (§12) | Works with Auth0, Keycloak, Ping, Entra ID, Okta, Curity and others; Valet adds only what the platform lacks |
 | Licence | Apache 2.0 | Patent grant and permissive reuse, as banks expect |
@@ -80,7 +80,9 @@ flowchart LR
     subgraph BANK["Bank (runs everything below)"]
         AS["Authorisation server<br/>PAR · consent · tokens · CIBA"]
         API["Banking API enforcement<br/>check order §5"]
-        ST[("Grants · ledger · approvals<br/>receipts")]
+        PIS["Payment Intent Service<br/>state machine · mandate hold<br/>cancel-or-confirm · reconciliation"]
+        OPS["Operations queue<br/>payments-unknown-outcome"]
+        ST[("Grants · ledger · intents<br/>approvals · denylist · receipts")]
         IDP["Bank IdP<br/>customer sign-in"]
         CORE["Core banking payments API<br/>executes, clears, settles"]
     end
@@ -91,20 +93,23 @@ flowchart LR
     AS --> IDP
     AS --> ST
     API --> ST
-    API -- "execute payment intent (idempotent)" --> CORE
+    API -- "create or continue intent" --> PIS
+    PIS --> ST
+    PIS -- "execute · status · cancel (idempotent on the intent id)" --> CORE
+    PIS -. "no answer, or cannot tombstone" .-> OPS
     AS -. "is this agent trusted?" .-> REG
     API -. "is this agent trusted?" .-> REG
 ```
 
-**Three parties, one place where decisions are made.** The customer signs in and decides only on the bank's own pages. The agent holds a private key and a permission bound to that key, never credentials. Every decision is made at the bank: its authorisation server issues permissions, and its API checks the permission, the grant's live status and the agent's trust on every call, then writes a receipt. Money moves only in the bank's own payment system, on one idempotent instruction from Valet.
+**Three parties, one place where decisions are made.** The customer signs in and decides only on the bank's own pages. The agent holds a private key and a permission bound to that key, never credentials. Every decision is made at the bank: its authorisation server issues permissions, and its API checks the permission, the grant's live status and the agent's trust on every call, then writes a receipt. Money moves only in the bank's own payment system, on one idempotent instruction that Valet's Payment Intent Service initiates; the bank's payments API executes it.
 
 | Component | Responsibility | In the PoC | In a bank |
 | --- | --- | --- | --- |
 | Valet authorisation server | PAR, consent, token issue, refresh rotation, CIBA approvals | `valet/bank/authz.py`, `web.py` | The bank's own authorisation server (native mode), or this one with the bank's IdP signing customers in (federated mode), §12 |
 | Banking API enforcement | The check order in §5 on every call; offers exceptions as `approval_required` | `valet/bank/api.py` | API gateway policy in front of the core banking API |
-| Payment intents | One durable record per payment: idempotency, the hold against the mandate, the state machine and reconciliation (§5.1) | `valet/bank/payments.py` | The same component, on the bank's database |
-| Core banking adapter | Hands the bank one idempotent instruction per intent and reads back the outcome. The only place Valet touches the payment system | `valet/bank/core.py`: `DemoCore`, a fictional core in the same SQLite file | An adapter for the bank's payments API, passing the intent id as its idempotency key |
-| Store | Grants, monthly ledger, payment intents, approvals, offered actions, DPoP replay cache, receipts | SQLite (`store.py`) | Highly available database; signing keys in an HSM |
+| Payment Intent Service | One durable record per payment: idempotency, the hold against the mandate, the state machine, cancel-or-confirm, reconciliation and escalation to operations (§5.1). Shared by the direct API, the MCP gateway and pause and revoke | `valet/bank/payments.py` | The same component, on the bank's database (Postgres in the POC, §17) |
+| Core banking adapter | Hands the bank one idempotent instruction per intent, reads back the outcome, and asks the bank to cancel-or-confirm. The only place Valet touches the payment system | `valet/bank/core.py`: `DemoCore`, a fictional core in the same SQLite file | An adapter for the bank's payments API, passing the intent id as its idempotency key |
+| Store | Grants, monthly ledger, payment intents, approvals, offered actions, DPoP replay cache, the bank's denylist, receipts | SQLite (`store.py`) | Highly available database; signing keys in an HSM |
 | Agent registry | Who the agent is, its keys, whether it is still trusted | `StaticRegistry` (`registry.py`) | `VeridactRegistry` (§9) |
 | Valet SDK | PAR with PKCE, DPoP proofs, approvals | `valet/agent/sdk.py` | Published SDK for agent operators |
 | Customer screens | Consent, approvals, AI agents list, pause and disconnect | Jinja templates | The bank's app, with push notifications |
@@ -151,6 +156,8 @@ An exception uses a third type, valid for one action only:
 **Access levels are templates over these types:** *View only* is `valet_accounts` alone; Approved payer adds valet\_payments, with every payment sent to the customer for approval in the bank app (the pilot default). *Bill payer* adds `valet_payments` with `pay_existing_beneficiary`, a per-payment cap, a maximum number of payments a month, and a monthly limit. The agent may ask for a level; the customer chooses on the consent screen, and the grant records what the customer chose, not what the agent asked for.
 
 ### 3.1 Target data model: versioned mandates (proposed)
+
+**Mandate references are normative from version 0.6; mandate versions beyond 1 are deferred.** Every grant records its mandate version (always 1 today, because a mandate cannot be edited) and, in native mode, the token issuer it was made with. Every payment intent records the mandate version it was checked against, and every receipt for a grant carries `"mandate": {"id": "<grant id>", "version": 1}`. Agents, the MCP gateway and dispute tools can rely on these fields now; when editing arrives (below), only the version number changes. Built and tested (`tests/test_stopping.py`).
 
 The PoC's grant is one row whose terms and status change in place. The target model splits it into a stable **mandate** and immutable **mandate versions**, so every receipt names the exact terms that applied when the agent acted. Audit and disputes depend on this record, and it is the same record as the MCP gateway's mandate.
 
@@ -224,6 +231,8 @@ grant_type=authorization_code&code=SplxlO…&code_verifier=dBjftJeZ4…
 
 FAPI's own concern is that a lost response strands an honest client. The retry window answers it, in the way the profile's note allows where rotation is used: the previous token stays usable for a short, limited time. Rotation as the normal behaviour remains a **deliberate, documented difference** from the profile (§14.1), and a conformance run will report it. A bank that needs strict conformance on this point can run native mode with rotation switched off on its own identity platform.
 
+**Reconsidered in version 0.6 and kept.** A proposal to switch to non-rotating, sender-constrained refresh tokens for strict FAPI 2.0 conformance was considered and declined, for the same reason: the bank does not control the agent's private key, and rotation with reuse detection is the control the bank runs itself (§18).
+
 ## 5. Tokens and enforcement at the bank API
 
 **The access token says who and what; the live grant says whether, right now; the ledger says how much is left; the bank checks all three on every call, in a fixed order.**
@@ -238,12 +247,12 @@ FAPI's own concern is that a lost response strands an honest client. The retry w
 | --- | --- | --- |
 | 1 | DPoP proof: `typ dpop+jwt`, ES256, `htm` and `htu` match the request, `iat` within 60 s, `jti` unused, `ath` = hash of the token | 401 `invalid_dpop_proof` |
 | 2 | Token signature, `aud`, `exp` | 401 `invalid_token` |
-| 3 | Proof key thumbprint = `cnf.jkt` | 401 `invalid_token` |
-| 4 | Agent still trusted in the `AgentRegistry` | 403 `agent_untrusted` |
+| 3 | Proof key thumbprint = `cnf.jkt`; in native mode the token's issuer is the one the grant was made with | 401 `invalid_token` |
+| 4 | Not on the bank's denylist (client, operator or key, read from the database); still trusted in the `AgentRegistry`; for payments, the registry is reachable (§9.1) | 403 `agent_denied`; 403 `agent_untrusted`; 503 `registry_unavailable` |
 | 5 | Grant status is `active` (live lookup) and not expired | 403 `grant_paused`, `grant_revoked` or `grant_expired` |
 | 6 | The action is in `authorization_details` (type, action, account) | 403 `insufficient_authorization` |
 | 7 | Payments: an `Idempotency-Key` is present; the payee is an existing beneficiary; the month’s total, counting what is spent and what is held for unconfirmed payments, stays within the limit. Finding or creating the payment intent, the check and the hold happen in one locked step, so two parallel payments cannot both pass a limit only one fits under. (Per-payment cap and payment count: §3.1, proposed) | 400 `invalid_request` without a key; 422 `idempotency_key_reused`; 403 `approval_required`, with the exact `valet_payment_once` the agent should request |
-| 8 | Instruct the bank's payments API with the intent id, record its answer, write a receipt (§5.1). Valet does not execute | 200 `paid` with the receipt hash; 422 if the bank declines; 202 `pending` if the bank has not answered |
+| 8 | Check the denylist again, then initiate the instruction through the bank's payments API with the intent id, record its answer, write a receipt (§5.1). Valet does not execute | 200 `paid` with the receipt hash; 422 if the bank declines or the intent was cancelled; 202 `pending` if the bank has not answered |
 
 Every outcome, allowed, refused, declined by the bank or unknown, writes a receipt (§8). Step 5 is a database read on every call: that is what makes pause and revoke immediate, without waiting for tokens to expire. The grant store is therefore on the critical path: if it cannot be reached, calls fail closed, so it needs an availability target at least as high as the banking API's.
 
@@ -257,22 +266,28 @@ HTTP/1.1 403 Forbidden
    "amount": {"amount": "1250.00", "currency": "ZAR"}, "reference": "Electricity Oct"}]}
 ```
 
-### 5.1 Payment intents: exactly once, and Valet never executes
+### 5.1 Payment intents: exactly once, cancel-or-confirm, and Valet never executes
 
-**Every payment an agent asks for becomes one durable payment intent. Valet holds the amount against the mandate, gives the bank's payments API one idempotent instruction, and records the answer. The bank executes, clears and settles.**
+**Every payment an agent asks for becomes one durable payment intent in the Payment Intent Service. Valet holds headroom on the mandate, initiates one idempotent instruction through the bank-controlled payments API, and records the answer. The bank executes, clears and settles. A hold is released only when the bank says the instruction is settled or dead; nothing is released on a timer.**
 
 ```mermaid
 stateDiagram-v2
     [*] --> reserved: inside the mandate
     [*] --> approval_required: new payee or over the limit
     approval_required --> reserved: customer approves (single-use token)
+    approval_required --> cancelled: pause, revoke or expiry
     reserved --> executing: instruction sent to the bank
-    executing --> confirmed: bank paid
+    reserved --> cancelled: pause, revoke or denylist
+    executing --> confirmed: bank accepted
     executing --> failed: bank declined
     executing --> unknown_outcome: no answer
     unknown_outcome --> executing: retry with the same key
     unknown_outcome --> confirmed: reconciled
     unknown_outcome --> failed: reconciled
+    executing --> cancelling: pause or revoke
+    unknown_outcome --> cancelling: pause, revoke, or never received after 15 min
+    cancelling --> cancelled: bank tombstoned it
+    cancelling --> confirmed: bank had already accepted it
 ```
 
 | State | Meaning | Held against the month |
@@ -281,29 +296,50 @@ stateDiagram-v2
 | `reserved` | Checked and held in the locked step; not yet sent | Yes |
 | `executing` | Sent to the bank; no answer recorded. Also where a crash leaves an intent | Yes |
 | `unknown_outcome` | The bank did not answer (timeout, dropped connection, 5xx). The payment may have gone through | Yes |
+| `cancelling` | Valet has asked the bank to cancel-or-confirm and has no answer yet | Yes |
 | `confirmed` | The bank accepted the payment and returned its own payment id; the month's spend is updated | Spent |
 | `failed` | The bank declined; the hold is released | No |
+| `cancelled` | Stopped before the bank accepted it: never sent, or tombstoned by the bank. Nothing was paid; the hold is released | No |
+
+**Where the hold lives.** Valet holds *mandate headroom*, not funds: a held intent counts against the customer's monthly limit at Valet, so a parallel payment cannot squeeze past it. The customer's account balance is untouched until the bank executes. A bank whose core supports a funds hold (an earmark or a reservation) can place one through the adapter when the intent is reserved; that is the adapter's choice, not something Valet assumes.
+
+**The point of no return is the bank's acceptance.** Until the bank's payments API accepts the instruction, Valet can stop it. Once the bank accepts it, the payment belongs to the bank's own rails, recall and dispute processes; Valet records it as `confirmed` and does not pretend to reverse it.
 
 **Rules**
 
 - **One intent per grant and `Idempotency-Key`.** Keys are scoped to the grant, so two customers of the same agent can use the same key. The same key with the same payment continues or replays that intent and returns the same answer, including the same receipt. The same key with a different payment is refused (`idempotency_key_reused`). A new payment needs a new key.
 - **The intent id is the bank's idempotency key.** Valet generates `payment_intent_id` and passes it to the bank's payments API on every attempt, so a re-sent instruction returns the bank's original result instead of paying again. The bank's own payment id comes back and is kept as the reconciliation reference.
-- **A timeout is not a failure.** If the bank does not answer, the intent becomes `unknown_outcome`, the agent is told `pending` (HTTP 202), and the hold stays. Nothing is released and no second attempt is authorised under a new key until the bank says paid or declined.
-- **Recovery is a retry or a reconciliation, never a guess.** A retry with the same key re-sends the same intent. A scheduled reconciliation asks the bank about every held intent: paid or declined is settled; an intent the bank has never seen stays held for a grace period (15 minutes in the PoC) and is then released.
+- **A timeout is not a failure.** If the bank does not answer, the intent becomes `unknown_outcome`, the agent is told `pending` (HTTP 202), and the hold stays. Nothing is released and no second attempt is authorised under a new key until the bank says paid, declined or tombstoned.
+- **Cancel-or-confirm, never release on a timer.** To stop an intent that may have reached the bank, Valet asks the bank to cancel it. The bank answers in one of two ways: it **tombstones** the intent id (it will never execute that instruction, even if a copy arrives late) and Valet releases the hold; or it reports the payment **already accepted**, and Valet confirms it. No answer leaves the intent `cancelling` and held, and reconciliation asks again.
+- **Recovery is a retry, a reconciliation or a cancel-or-confirm, never a guess.** A retry with the same key re-sends the same intent. A scheduled reconciliation asks the bank about every held intent: paid or declined is settled; an intent the bank has never seen is sent to cancel-or-confirm once it is 15 minutes old (`escalate_after`).
+- **Escalation to operations.** An intent still held after 15 minutes because the bank does not answer, or because the adapter cannot tombstone, goes to the operations queue `payments-unknown-outcome` (`GET /ops/payments/escalated`), with one `escalated` receipt. It stays held. The bank sets the SLA for working the queue; until someone resolves it with the bank, the customer's headroom stays reduced, which is the safe side.
 - **Limits count held money.** The limit check adds what is spent and what is held, inside the same locked step that creates the hold.
-- **Approvals are spent at the hold.** A one-time approval is consumed in the same locked step that moves its intent to `reserved`, and only that intent can use it (§6). If the bank then declines, the intent and the approval are both finished: the agent asks again with a new key.
+- **Approvals are spent at the hold.** A one-time approval is consumed in the same locked step that moves its intent to `reserved`, and only that intent can use it (§6). If the bank then declines, or the intent is cancelled, the intent and the approval are both finished: the agent asks again with a new key.
+- **The denylist is checked again at execution.** If the bank denylists the agent, its operator or its key between the API check and the instruction, the intent is cancelled instead of sent (§9.1).
 - **Confirmed means accepted by the bank's payments API.** Clearing and final settlement are the bank's, on its own rails; Valet records acceptance, not settlement.
 
-**What Valet needs from the bank.** Two operations on the bank's payments API, behind `CoreBanking` in `core.py`:
+**Pause and revoke, by payment state.** Pause is the customer's panic button: it stops everything the bank has not accepted, including payments the customer has already approved but the agent has not sent.
+
+| State when the customer pauses or revokes | What happens | The customer is told |
+| --- | --- | --- |
+| `approval_required` | Intent and approval cancelled at once | Cancelled, nothing paid |
+| `reserved` (including approved but not yet sent) | Intent and its approval cancelled at once; the hold is released | Cancelled, nothing paid |
+| `executing`, `unknown_outcome` | Cancel-or-confirm: tombstoned → cancelled; already accepted → confirmed; no answer → `cancelling`, held, reconciled and escalated | "One payment was already with the bank and may still complete" |
+| `confirmed`, `failed`, `cancelled` | Nothing to do | — |
+
+**Resume needs a fresh approval.** Resuming a paused grant does not revive anything that pause cancelled: an approval given before the pause is gone (`access_denied`, "the request was cancelled"), and the agent must ask again under a new key. The SDK reports this as `cancelled`.
+
+**What Valet needs from the bank.** Three operations on the bank's payments API, behind `CoreBanking` in `core.py`:
 
 | Operation | Contract |
 | --- | --- |
-| `execute(instruction)` | Idempotent on `payment_intent_id`. Returns `paid` with the bank's payment id, or `declined` with a reason. Any failure to answer means "unknown", never "declined" |
-| `status(payment_intent_id)` | The same result, or "never received". After Valet releases an intent the bank never received, the bank must refuse that id if it arrives late |
+| `execute(instruction)` | Idempotent on `payment_intent_id`. Returns `paid` with the bank's payment id, or `declined` with a reason. Any failure to answer means "unknown", never "declined". A tombstoned id is always declined with reason `cancelled` |
+| `status(payment_intent_id)` | The same result, or "never received" |
+| `cancel(payment_intent_id)` | Atomic with `execute` at the bank: either `tombstoned` (the bank records the id as dead and will never execute it, including a copy that arrives later) or `already_accepted` with the bank's payment id. Any failure to answer means "unknown". An adapter that cannot do this sets `supports_cancel = false`; its held intents then escalate to operations and are never released automatically |
 
 Debtor ownership, account status and payee eligibility are confirmed by the bank's systems when it executes, not taken from the token or the mandate.
 
-**Status.** Built on the direct API and on the MCP gateway, which create and settle the same payment intents through the same component (`payments.py`), and covered by tests (`tests/test_payments.py`, `tests/test_mcp.py`): retries, reused keys, parallel payments, a bank that pays but never answers, a bank that never receives the instruction, a crash between the hold and the answer, reconciliation, and replayed approvals. On the gateway every payment starts as `approval_required`, and `get_payment_status` is what moves an approved intent on. The Consent Service's open-banking API keeps its own reserve-and-settle record and sends the same idempotent instruction through the same adapter, keyed on its decision id. In the PoC the "bank" is a fictional core in the same database and reconciliation runs on request (`POST /ops/payments/reconcile`). **The first real adapter, against a bank's sandbox payments API with scheduled reconciliation, is the main deliverable of the first bank POC.**
+**Status.** Built on the direct API and on the MCP gateway, which create and settle the same payment intents through the same component (`payments.py`), and covered by tests (`tests/test_payments.py`, `tests/test_mcp.py`, `tests/test_stopping.py`): retries, reused keys, parallel payments, a bank that pays but never answers, a bank that never receives the instruction, a crash between the hold and the answer, reconciliation, replayed approvals, cancel-or-confirm with each answer, an adapter that cannot cancel, and pause or revoke in every state (§17). On the gateway every payment starts as `approval_required`, and `get_payment_status` is what moves an approved intent on. The Consent Service's open-banking API keeps its own reserve-and-settle record and sends the same idempotent instruction through the same adapter, keyed on its decision id. In the PoC the "bank" is a fictional core in the same database that supports tombstones, and reconciliation runs on request (`POST /ops/payments/reconcile`). **The first real adapter, against a bank's sandbox payments API with scheduled reconciliation, is the main deliverable of the first bank POC.**
 
 ## 6. Approval flow for exceptions
 
@@ -324,11 +360,14 @@ Debtor ownership, account status and payee eligibility are confirmed by the bank
 
 | Action | Who | Effect | Reversible |
 | --- | --- | --- | --- |
-| Pause | Customer (dashboard or approval screen), bank fraud team | Every call refused with `grant_paused`; refresh refused; pending approvals cancelled | Yes, by the customer |
+| Pause | Customer (dashboard or approval screen), bank fraud team | Every call refused with `grant_paused`; refresh refused; every approval not yet used cancelled, including approved but unsent; every payment the bank has not accepted cancelled or sent to cancel-or-confirm (§5.1) | Yes, by the customer; cancelled approvals stay cancelled |
 | Pause all | Customer | Every grant for that customer paused at once | Yes |
-| Revoke (disconnect) | Customer, bank | Grant revoked; refresh tokens deleted | No; the agent must connect again |
+| Revoke (disconnect) | Customer, bank | Grant revoked; refresh tokens deleted; approvals and unaccepted payments cancelled as for pause | No; the agent must connect again |
 | Expiry | Automatic | Grant becomes `expired` at `expires`; renewal needs fresh customer consent | No |
-| Agent untrusted | Bank, or Veridact revoking the operator | All grants for that agent refused with `agent_untrusted` (registry cached at most 60 s) | When trust is restored |
+| Denylisted | Bank | Every call for that client, operator or key refused with `agent_denied` on the next request, on every node sharing the database; checked again before any payment is sent (§9.1) | When the bank removes the entry |
+| Agent untrusted | Bank, or Veridact revoking the operator | All grants for that agent refused with `agent_untrusted` within the registry cache (60 s) (§9.1) | When trust is restored |
+
+The activity page tells the customer what stopping did to payments, including when one was already with the bank and may still complete; the pause or revoke receipt records the counts.
 
 Access tokens last 5 minutes, but that is not the safety mechanism: the live grant check is. Short tokens only limit how long a token remains useful if the grant check were ever bypassed.
 
@@ -383,7 +422,7 @@ Four kinds of evidence stay distinguishable in every record: **authentication** 
 ```python
 class AgentRegistry(Protocol):
     def lookup(self, client_id: str) -> AgentRecord | None: ...   # name, operator, verified, jwks, redirect_uris
-    def is_trusted(self, client_id: str) -> bool: ...             # cached at most 60 s
+    def is_trusted(self, client_id: str, for_payment: bool = False) -> bool: ...   # cached at most 60 s
 ```
 
 | Implementation | Source of truth | Use |
@@ -407,7 +446,20 @@ The consent screen shows the operator name only from the registry, never from th
 - Where several agents sit behind one platform client (Claude, ChatGPT), activity is attributed to the platform client. Valet does not claim per-agent provenance, quotas or revocation there (§14).
 - An `agent_instance_id` will be recorded only when a platform assertion or attestation backs it, together with who asserted it, whether it verified, and its assurance level. The proposed `act` claim (§5) names the client until then, never an unverified agent identity.
 
-### 9.1 Vendor-hosted agent identity (CIMD), proposed
+### 9.1 Stopping an agent: two paths, with stated times
+
+**The bank has two ways to stop an agent, and each has a stated propagation time.**
+
+| Path | What it stops | How fast | Where it is checked |
+| --- | --- | --- | --- |
+| **Denylist** (`POST /ops/denylist`, kinds `client_id`, `operator`, `jkt`) | One agent, every agent of one operator, or one key | The next request, on every node that shares the bank's database. No cache | Every API and MCP call, and again just before a payment is sent |
+| **Registry trust** (Veridact or the bank's registry) | Agents the registry no longer trusts | Within the registry cache, 60 seconds (`registry_cache_s`) | Every API and MCP call, and at `/par` |
+
+The denylist is the emergency brake for an incident; the registry is the standing source of trust. Removing a denylist entry (`DELETE /ops/denylist/{kind}/{value}`) takes effect on the next request too.
+
+**If the registry cannot be reached**, Valet keeps the last good copy and marks the registry unavailable. Payments fail closed at once (503 `registry_unavailable`). Reads may use the last good copy for one more cache period (60 seconds), then fail closed too. The denylist does not depend on the registry and keeps working. `GET /readyz` reports whether the registry is reachable. Built and tested (`tests/test_stopping.py`).
+
+### 9.2 Vendor-hosted agent identity (CIMD), proposed
 
 Agent ecosystems identify an agent by an HTTPS URL serving its metadata and signing keys: the Personal Agent Protocol does this, Claude does it through Client ID Metadata Documents (CIMD) hosted by Anthropic, and Veridact's `did:web` identities follow the same pattern.
 
@@ -441,7 +493,7 @@ Agent ecosystems identify an agent by an HTTPS URL serving its metadata and sign
 | POST /handoff/decision | Browser | The same ticket, single use | Creates the grant from the customer's choice under the bank's policy and binds it to the ticket's `dpop_jkt`, then auto-posts a signed result (grant id or deny, same nonce) back into the IdP's login |
 | DELETE /internal/grants/{id} | The bank's IdP | Shared secret in the PoC; mTLS in production | Native mode: the customer disconnected the agent in the IdP's own account pages; revokes the grant and writes a receipt |
 
-Customer and operations pages on the bank: `GET/POST /login`, `POST /logout`, `GET /app`, `GET /app/agents/{grant}`, `GET /app/agents/{grant}/payments/{payment_intent_id}` (the payment evidence page, §8.1), `POST /app/agents/{grant}/{pause|resume|revoke}`, `POST /app/pause-all`, `GET /app/approvals`, `GET/POST /app/approvals/{id}`, `GET /ops`, `POST /ops/agents/{client_id}/trust`, `POST /ops/payments/reconcile`, `GET /receipts/verify`.
+Customer and operations pages on the bank: `GET/POST /login`, `POST /logout`, `GET /app`, `GET /app/agents/{grant}`, `GET /app/agents/{grant}/payments/{payment_intent_id}` (the payment evidence page, §8.1), `POST /app/agents/{grant}/{pause|resume|revoke}`, `POST /app/pause-all`, `GET /app/approvals`, `GET/POST /app/approvals/{id}`, `GET /ops`, `POST /ops/agents/{client_id}/trust`, `POST /ops/payments/reconcile`, `GET /ops/payments/escalated` (the `payments-unknown-outcome` queue), `POST /ops/denylist`, `DELETE /ops/denylist/{kind}/{value}`, `GET /receipts/verify`, and `GET /readyz` (the go-live check: key-binding mode, payments adapter and whether it can cancel, registry reachability, denylist size, escalated payments).
 
 **A payment inside the grant:**
 
@@ -465,7 +517,9 @@ HTTP/1.1 200 OK
 | Error | HTTP | Meaning | What the agent does |
 | --- | --- | --- | --- |
 | `invalid_token`, `invalid_dpop_proof` | 401 | Token or proof missing, invalid, replayed or bound to another key | Get a fresh token; check the clock and the URL it signs |
+| `agent_denied` | 403 | The bank has denylisted this agent, its operator or its key | Stop; the operator contacts the bank |
 | `agent_untrusted` | 403 | The bank or Veridact has withdrawn trust in the operator | Stop; the operator contacts the bank |
+| `registry_unavailable` | 503 | The bank cannot reach its agent registry; payments are refused until it can | Retry later; nothing was held or paid |
 | `grant_paused` | 403 | The customer paused the agent | Tell the customer; try again after they resume |
 | `grant_revoked`, `grant_expired` | 403 | The permission has ended | Start a new connect |
 | `insufficient_authorization` | 403 | Outside the grant, or adding a beneficiary | Ask the customer to change access in the bank app |
@@ -474,6 +528,7 @@ HTTP/1.1 200 OK
 | `invalid_request` | 400 | No `Idempotency-Key`, or a malformed payment | Fix the request |
 | `idempotency_key_reused` | 422 | The key was already used for a different payment | Use a new key for a new payment |
 | `insufficient_funds`, `payment_declined` | 422 | The bank declined; nothing was paid and the hold is released | Tell the customer; a new attempt needs a new key |
+| `payment_cancelled` | 422 | Cancelled before the bank accepted it (pause, revoke, denylist, or tombstoned by the bank); nothing was paid | Tell the customer; a new attempt needs a new key, and a new approval if one was required |
 | (`status: pending`) | 202 | The bank has not confirmed; the payment may have gone through | Retry with the same key, or read `GET /api/payments/{id}`. Never send it under a new key |
 
 At `/token` and `/bc-authorize`: `authorization_pending` (keep polling at `interval`), `slow_down` (three approvals already waiting), `expired_token` (the customer did not answer in time), `access_denied` (declined or cancelled), `invalid_grant` (bad code or verifier, refresh reuse, or a second token for one approval), `invalid_authorization_details` (an action the API did not offer), `unauthorized_client` (unknown or untrusted agent).
@@ -489,7 +544,8 @@ At `/token` and `/bc-authorize`: `authorization_pending` (keep polling at `inter
 | Customer coached to approve | The prompt shows payee, amount, “new recipient”, and the bank’s scam warning; the bank’s own fraud scoring still runs on approved payments |
 | Stolen access or refresh token | DPoP binding (`cnf.jkt`), 5-minute access tokens, refresh rotation with reuse detection that pauses the grant (§4.1). Rotation is kept because the bank does not control the agent's private key |
 | Stolen authorisation code, or a grant claimed with another key | The agent names its key at PAR; the grant is bound to it at consent, in both modes; the code is redeemed only with a proof from that key; a native-mode grant with no key is refused |
-| Double payment after a retry, a crash or a timeout | One payment intent per `Idempotency-Key`; the intent id is the bank's idempotency key; a timeout is `unknown_outcome`, held until the bank answers (§5.1) |
+| Double payment after a retry, a crash or a timeout | One payment intent per `Idempotency-Key`; the intent id is the bank's idempotency key; a timeout is `unknown_outcome`, held until the bank answers; a hold is released only on a tombstone, so a late copy of the instruction cannot pay (§5.1) |
+| Agent compromised mid-incident | Customer pause cancels every unaccepted payment and approval; the bank's denylist stops a client, operator or key on the next request and again before any payment is sent (§7, §9.1) |
 | Parallel payments squeezing past a limit | The limit check and the hold are one locked step, and held money counts |
 | Replayed DPoP proof | `jti` cache, 60-second `iat` window, `htm`/`htu`/`ath` checks |
 | Approval reused or altered | Bound to the payment intent the bank held; consumed in the same locked step as the hold; 5-minute expiry; digest match on the exact payment |
@@ -514,9 +570,10 @@ At `/token` and `/bc-authorize`: `authorization_pending` (keep polling at `inter
 | When the grant is bound to the agent's key | At consent, from `dpop_jkt` in the pushed request | At consent, from the `dpop_jkt` the IdP learned during authorisation and passed to Valet |
 | Built in the PoC | `idp.py`; run against Keycloak 26.4.0 | `tokens.py`, `grants.py`, `handoff.py`, and the Keycloak extension; run against Keycloak 26.4.0 |
 
-**Key binding is the same in both modes: at consent, never on first use.** The agent names its DPoP key during authorisation (`dpop_jkt`, RFC 9449 §10). In federated mode Valet's authorisation server stores it with the pushed request. In native mode the bank's IdP binds its authorisation code to that key and passes the thumbprint to Valet, in the hand-off ticket or to `POST /internal/grants`. Valet records the binding on the grant: client, grant id and `jkt`. On every call it checks that the token comes from an issuer the bank has configured and that its client and proof key match the grant; a `valet_grant` claim alone never binds anything. Recording the issuer and the mandate version alongside them comes with versioned mandates (§3.1).
+**Key binding is the same in both modes: at consent. Binding at first use exists for demos only.** The agent names its DPoP key during authorisation (`dpop_jkt`, RFC 9449 §10). In federated mode Valet's authorisation server stores it with the pushed request. In native mode the bank's IdP binds its authorisation code to that key and passes the thumbprint to Valet, in the hand-off ticket or to `POST /internal/grants`. Valet records the binding on the grant: client, grant id and `jkt`. Valet records the binding tuple on the grant: **issuer, client, mandate (grant) id and `jkt`**, with the mandate version. On every call it checks that the token comes from the issuer the grant was made with, and that its client and proof key match the grant; a `valet_grant` claim alone never binds anything.
 
-- A native-mode grant that arrives with no key is refused at the API. A bank whose IdP cannot pass the key yet can turn on binding at first use (`VALET_ALLOW_FIRST_USE_BINDING=1`). That is weaker, because the first valid token for the grant claims it, and each such binding writes its own receipt.
+- A native-mode grant that arrives with no key is refused at the API.
+- **Binding at first use is for demos only.** `VALET_ALLOW_FIRST_USE_BINDING=1` lets the first valid token for an unbound grant claim it, which is weaker, and each such binding writes its own receipt. Valet refuses to start with it unless the payments adapter is the fictional `DemoCore` and every configured identity platform is on this machine (a loopback address), so it cannot reach real money or a real IdP. `GET /readyz` reports `key_binding` as `at_consent` or `first_use_demo_only`, and a go-live check should assert `at_consent`. A bank whose IdP cannot pass the key uses federated mode until it can.
 - **Key rollover.** A grant has one key. An agent that rotates its key connects again, with fresh customer consent, and gets a new grant. A token for an existing grant that arrives with a different key is refused and never rebinds it; repeated attempts are a signal for the bank's fraud monitoring. In-place rollover, signed by the old key, is not designed yet.
 
 In native mode the consent the customer gave is the grant registered with Valet, so a token can never widen it. A single-use approval token from the IdP's own CIBA is accepted only for an action the bank's API offered, matching it exactly, and only once.
@@ -539,7 +596,7 @@ Keycloak's row was confirmed against a running Keycloak 26.4.0: its metadata adv
 
 - **Auth0.** Federated: a Regular Web Application. Use `email` or a customer-number claim added by an Action as the customer claim; Valet asks for `max_age=0` at step-up and checks `auth_time`. Native: an Action registers the consent and adds the `valet_grant` claim; Universal Login templates show the RAR details; approvals can use CIBA with Guardian push.
 - **Keycloak.** Both modes run end to end on Keycloak 26.4.0. Federated: the realm file in the repo and `docker-compose.keycloak.yml`. Native: the Valet extension (`extensions/keycloak-valet`, Java). After Keycloak signs the customer in, it hands them to Valet's consent screen with a signed ticket that carries the agent's `dpop_jkt` (Keycloak 26.4 accepts the parameter on the pushed request and binds its authorisation code to it). Valet binds the grant to that key at consent. Keycloak then checks Valet's signed answer, and puts the grant id in the agent's DPoP-bound tokens as `valet_grant`. RAR is not needed, because the customer's choice is made on Valet's screen. Approvals stay with Valet's CIBA, which only issues to the bound key.
-- **PingFederate.** Native, with the consent hand-off, is the chosen route for the first bank POC, so PingFederate issues the agent's tokens and Valet keeps consent, mandates and enforcement. It needs an access-token mapping for the grant claim, a policy step that hands the customer to Valet's consent screen and reads the signed result (the equivalent of the Keycloak extension), and CIBA with the bank's push authenticator or Valet's own. To confirm on the bank's version: PAR, DPoP, `dpop_jkt` (authorisation code binding), and whether a policy step can read the thumbprint to pass to Valet. If it cannot out of the box, Valet supplies a PingFederate adapter that does. Until that is proven, the fallbacks are binding at first use (weaker, and recorded) or federated mode.
+- **PingFederate.** Native, with the consent hand-off, is the chosen route for the first bank POC, so PingFederate issues the agent's tokens and Valet keeps consent, mandates and enforcement. It needs an access-token mapping for the grant claim, a policy step that hands the customer to Valet's consent screen and reads the signed result (the equivalent of the Keycloak extension), and CIBA with the bank's push authenticator or Valet's own. To confirm on the bank's version: PAR, DPoP, `dpop_jkt` (authorisation code binding), and whether a policy step can read the thumbprint to pass to Valet. If it cannot out of the box, Valet supplies a PingFederate adapter that does. Until that is proven, the fallback is federated mode; binding at first use is not available outside a demo.
 - **Microsoft Entra ID and Entra External ID.** Federated: Entra stays the customer identity provider, and Valet's authorisation server adds the agent features Entra does not provide.
 - **Okta.** Federated, because RAR is not documented. DPoP and CIBA exist, so revisit native mode if RAR arrives.
 
@@ -575,7 +632,7 @@ The extension uses Keycloak's internal authenticator and protocol-mapper SPIs, a
 ```bash
 pip install -r requirements.txt
 python demo.py          # scripted end-to-end run: 13 steps, 24 checks
-python -m pytest -q     # 102 behaviour tests, including payment safety, both identity-provider modes and the consent hand-off
+python -m pytest -q     # 115 behaviour tests, including payment safety and stopping payments, both identity-provider modes and the consent hand-off
 python run.py           # clickable: Kaya http://localhost:8001, Marula Bank http://localhost:8000 (thandi / demo)
 
 docker compose up --build        # the same clickable demo in containers
@@ -605,15 +662,17 @@ python deploy/keycloak/setup_native.py
 | 12 | Thandi disconnects Kaya | Immediate and final |
 | 13 | A receipt is altered | The signed hash chain shows exactly where |
 
+**Verified on 16 November 2026 (version 0.6):** 24 of 24 checks and 115 of 115 tests passed on Python 3.11 and 3.13, including the new stopping tests (§17). The native-mode Keycloak preflight was not re-run for 0.6; the Keycloak extension did not change.
+
 **Verified on 16 November 2026 (version 0.5):** 24 of 24 checks and 102 of 102 tests passed on Python 3.11 and 3.13 (99 before the payment evidence page was added), and the native-mode preflight passed 38 of 38 against Keycloak 26.4.0, including a payment through the MCP gateway recorded as a payment intent. As on 15 November, the services were started directly rather than in containers.
 
 **Verified on 15 November 2026 (version 0.4):** 24 of 24 checks and 93 of 93 tests passed on Python 3.11 (a clean virtual environment built only from `requirements.txt`) and 3.13. Native mode was run end to end against a real **Keycloak 26.4.0** with the rebuilt extension (compiled with `javac` against Keycloak's own libraries): `scripts/preflight.py` passed 38 of 38 checks across Kaya, the Consent Service app and the MCP gateway, with binding at first use switched off, plus the key-binding results in §12. That run started the services directly rather than in containers; the Docker images were not rebuilt.
 
 **Verified on 27 October 2026 (version 0.3, before the payment-intent and key-binding changes):** the clickable demo was driven end to end in a browser at phone width, including with the agent reaching the bank at a different address from the browser, as in Docker Compose, and federated mode was run against Keycloak 26.4.0: sign-in on Keycloak's page, consent, payment, and an approval that forced a fresh Keycloak sign-in (with `auth_time` checked). Neither was repeated for 0.4.
 
-**Not in the PoC** (a bank deployment needs these): an adapter for the bank's payments API in place of the fictional core, with reconciliation on a schedule and the late-arrival rule in §5.1; passkeys or biometrics in the bank's IdP instead of a demo password; push notifications to the bank app; keys in an HSM or KMS rather than files; shared, highly available storage instead of SQLite; TLS and usually mTLS or a gateway (including mTLS for the grant service and asymmetric keys for the consent hand-off); the Veridact registry instead of `StaticRegistry`; native-mode hooks for Auth0 (an Action) and PingFederate, and Keycloak account-console disconnects reaching Valet (an event listener); runs against real Auth0, Entra ID, Okta and Ping tenants; a run through the OpenID FAPI 2.0 conformance suite.
+**Not in the PoC** (a bank deployment needs these): an adapter for the bank's payments API in place of the fictional core, with cancel-or-confirm (tombstones), reconciliation on a schedule and an SLA for the escalation queue (§5.1); Postgres in place of SQLite, with the concurrency and failure-injection tests in §17; passkeys or biometrics in the bank's IdP instead of a demo password; push notifications to the bank app; keys in an HSM or KMS rather than files; shared, highly available storage instead of SQLite; TLS and usually mTLS or a gateway (including mTLS for the grant service and asymmetric keys for the consent hand-off); the Veridact registry instead of `StaticRegistry`; native-mode hooks for Auth0 (an Action) and PingFederate, and Keycloak account-console disconnects reaching Valet (an event listener); runs against real Auth0, Entra ID, Okta and Ping tenants; a run through the OpenID FAPI 2.0 conformance suite.
 
-**Next steps:** run federated sign-in against the pilot bank's own IdP tenant; build the native-mode hook for that IdP if it qualifies (§12); `VeridactRegistry` against the Veridact directory; push approvals into a test build of a bank app; load-test the live status check on every call; build the first real `CoreBanking` adapter against a sandbox payment rail; versioned mandates (§3.1); close the FAPI 2.0 differences in §14.1 and run the conformance suite.
+**Next steps:** run federated sign-in against the pilot bank's own IdP tenant; build the native-mode hook for that IdP if it qualifies (§12); `VeridactRegistry` against the Veridact directory; push approvals into a test build of a bank app; load-test the live status check on every call; build the first real `CoreBanking` adapter against a sandbox payment rail, including `cancel`; run the payment tests against Postgres with concurrency and failure injection (§17); versioned mandates (§3.1); close the FAPI 2.0 differences in §14.1 and run the conformance suite.
 
 ## 14. Two front doors: the direct API and the MCP gateway
 
@@ -702,4 +761,45 @@ Decisions of 16 November 2026 on the items version 0.4 left open.
 | Versioned mandates | **Deferred.** Customers cannot edit a mandate today; they can only pause, resume or revoke it, so there is one version by construction. Versions (§3.1) are built together with mandate editing, and must be in place before a customer can change a limit, payee list or expiry in place. Until then a change means a new consent and a new grant | Deferred, noted |
 | Per-grant receipt chains | **Deferred** (§8). One part to schedule earlier: personal data must move outside the chain before any real customer data is processed, for POPIA | Deferred |
 
-**Still open:** recording authentication context on approvals (§8.1); an agent registry with key rotation, compromise response and emergency revocation beyond the 60-second trust cache (§9); limit units and FX for non-rand payments; RTO, RPO and maximum revocation propagation time, which are the bank's to set (§5); and the conformance run and adversarial testing (§14.1).
+**Still open:** recording authentication context on approvals (§8.1); an agent registry with key rotation and compromise response (§9; emergency stop by denylist was added in 0.6, §9.1); limit units and FX for non-rand payments; RTO, RPO and maximum revocation propagation time, which are the bank's to set (§5); and the conformance run and adversarial testing (§14.1).
+
+## 17. Assurance: what is guaranteed, and the test that shows it
+
+**Each guarantee in this design has a test that fails if the guarantee breaks.** The tests run on every push (`.github/workflows`), on Python 3.11 and 3.13, with the demo script's 24 checks.
+
+| Guarantee | Section | Test |
+| --- | --- | --- |
+| A retry, a crash or a timeout never pays twice | §5.1 | `test_payments.py`: retries, lost reply, lost request, crash between hold and answer |
+| Two parallel payments cannot both pass a limit only one fits under | §5 | `test_payments.py`: parallel payments |
+| A hold is released only on a tombstone or a settlement, never on a timer | §5.1 | `test_payments.py::test_reconciliation_settles…`; `test_stopping.py::test_an_adapter_that_cannot_cancel_escalates_and_never_releases` |
+| Cancel-or-confirm: tombstoned releases, already accepted confirms, a late copy cannot pay | §5.1 | `test_stopping.py::test_cancel_or_confirm_releases_on_a_tombstone_and_confirms_what_the_bank_accepted` |
+| No answer to a cancel stays held and escalates to operations | §5.1 | `test_stopping.py::test_a_cancel_the_bank_does_not_answer_stays_held_and_escalates` |
+| Pause cancels approved-but-unsent payments; resume needs a new approval | §5.1, §7 | `test_stopping.py::test_pause_cancels_an_approval…`, `…even_after_the_one_time_token_was_fetched`; `test_valet.py::test_pause_is_immediate…` |
+| The customer is told when a payment was already with the bank | §7 | `test_stopping.py::test_the_activity_page_says_when_a_payment_was_already_with_the_bank` |
+| An approval is single use and finishes only the intent it was given for | §6 | `test_payments.py`: single-use approvals |
+| Denylist: next request, and again at execution | §9.1 | `test_stopping.py::test_the_denylist_stops_an_agent…`, `…is_checked_again_at_execution` |
+| Registry unreachable: payments fail closed, reads for one more cache period | §9.1 | `test_stopping.py::test_an_unreachable_registry…` |
+| The grant is bound to the agent's key and issuer at consent | §12 | `test_handoff.py`: binding at consent, issuer mismatch |
+| First-use binding only in a demo | §12 | `test_handoff.py::test_first_use_binding_refuses_to_start_outside_a_demo` |
+| Intents and receipts name the mandate and version | §3.1 | `test_stopping.py::test_intents_and_receipts_carry_the_mandate_id_and_version` |
+| Copied refresh token pauses the grant | §4.1 | `test_valet.py`: refresh reuse |
+| Receipts are tamper-evident | §8 | `test_valet.py`, and the demo's last check |
+
+**What these tests do not prove, and the POC must.** The PoC runs on SQLite, where one writer at a time makes the locked steps easy. A bank deployment runs several nodes on a shared database. **Postgres support, with concurrency and failure-injection tests, is a POC deliverable:** parallel payments and parallel pause-and-pay across nodes (row locks or serialisable transactions on the intent and the ledger), a node killed between the hold and the instruction, a database failover mid-payment, and the real adapter's cancel racing its execute. The guarantees above are only claimed for a deployment once those tests pass against its own database and payments adapter.
+
+## 18. Changes in version 0.6 and decisions taken
+
+Decisions of 16 November 2026 on proposals for version 0.6.
+
+| Proposal | Decision | Status |
+| --- | --- | --- |
+| Cancel-or-confirm instead of releasing on a timer | Adopted. A hold is released only on a tombstone or a settlement; no answer escalates to `payments-unknown-outcome`, still held. The adapter contract gains `cancel` (§5.1) | Built |
+| Say where the hold lives | Mandate headroom at Valet, not funds; a funds hold is the adapter's choice where the core supports it (§5.1) | Documented |
+| Point of no return, and revocation per state | The bank's acceptance is the point of no return. Pause is the panic button: it cancels everything the bank has not accepted, including approved-but-unsent payments. Resume never revives a cancelled approval; the agent asks again (§5.1, §7) | Built |
+| First-use binding | Demo only: Valet refuses to start with it unless the adapter is the fictional core and the identity platform is local. Production fallback is federated mode. `/readyz` reports the mode. Binding tuple is issuer, client, mandate id and `jkt` (§12) | Built |
+| Non-rotating refresh tokens for FAPI 2.0 | **Declined.** Rotation with a 60-second retry window stays, because the bank does not control the agent's private key (§4.1) | Kept as is |
+| Denylist and registry propagation | Two paths with stated times: denylist on the next request on every node, checked again at execution; registry within 60 s. Registry unreachable: payments fail closed at once, reads for one more cache period (§9.1) | Built |
+| Mandate references | The cheap half now: mandate id and version 1 on every grant, intent and receipt. Editing and real versions stay deferred (§3.1) | Built |
+| Wording and architecture diagram | "An authorisation and transaction-control layer that initiates execution through a bank-controlled payment API"; the Payment Intent Service and the operations queue are their own components (§1, §2) | Done |
+| Assurance | Guarantees mapped to tests; Postgres with concurrency and failure-injection testing is a POC deliverable (§17) | Documented; Postgres to do in the POC |
+

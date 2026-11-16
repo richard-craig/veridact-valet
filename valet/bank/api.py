@@ -21,6 +21,7 @@ from ..common.money import rand, to_cents, to_str
 from . import levels as L
 from .authz import _payment_summary, payment_detail
 from .context import Bank, OAuthError
+from .registry import RegistryUnavailable
 from .payments import HELD
 
 
@@ -58,7 +59,7 @@ def router(bank: Bank) -> APIRouter:
         return receipts.append(grant_id=c.grant["id"], agent=c.grant["client_id"], customer=c.grant["customer"],
                                action=action, outcome=outcome, basis=basis, grant_level=c.grant["level"], **kw)
 
-    def authenticate(request: Request) -> Caller:
+    def authenticate(request: Request, payment: bool = False) -> Caller:
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("DPoP "):
             raise OAuthError("invalid_token", "a DPoP-bound access token is required", 401)
@@ -75,6 +76,11 @@ def router(bank: Bank) -> APIRouter:
             raise OAuthError("invalid_token", "unknown grant", 401)
         if grant["client_id"] != claims["client_id"]:
             raise OAuthError("invalid_token", "token and grant name different agents", 401)
+        # The binding tuple: issuer, client id, mandate id and key thumbprint must all match the grant.
+        # Valet's own single-use approval tokens (its CIBA, still used in native mode) are the one other issuer.
+        own_approval = claims.get("iss") == bank.cfg.issuer and claims.get("once") and not claims.get("external")
+        if grant.get("issuer") and claims.get("iss") != grant["issuer"] and not own_approval:
+            raise OAuthError("invalid_token", "token is from a different issuer than this grant", 401)
         if claims.get("external"):
             # Native mode: the grant was bound to the agent's key at consent (the IdP passed dpop_jkt in the hand-off
             # ticket or to /internal/grants). A grant with no key is refused, unless the bank has turned on binding
@@ -89,7 +95,17 @@ def router(bank: Bank) -> APIRouter:
             if grant["jkt"] != jkt:
                 raise OAuthError("invalid_token", "token is bound to a different key from this grant", 401)
         caller = Caller(claims, grant)
-        if not bank.registry.is_trusted(claims["client_id"]):
+        why = bank.denied(claims["client_id"], jkt)
+        if why:
+            receipt(caller, request.url.path, "refused", "refused", reason="denylisted")
+            raise OAuthError("agent_denied", why, 403)
+        try:
+            trusted = bank.registry.is_trusted(claims["client_id"], for_payment=payment)
+        except RegistryUnavailable as e:
+            receipt(caller, request.url.path, "refused", "refused", reason="registry_unavailable")
+            raise OAuthError("registry_unavailable", "the bank cannot check this agent right now; payments fail "
+                                                     "closed. Try again later.", 503) from e
+        if not trusted:
             receipt(caller, request.url.path, "refused", "refused", reason="agent_untrusted")
             raise OAuthError("agent_untrusted", "the bank no longer trusts this agent's operator", 403)
         if grant["status"] != "active":
@@ -99,6 +115,10 @@ def router(bank: Bank) -> APIRouter:
 
     def caller(request: Request) -> Caller:
         return authenticate(request)
+
+    def payer(request: Request) -> Caller:
+        """A request that can move money: the registry must be reachable (fail closed)."""
+        return authenticate(request, payment=True)
 
     def allowed(c: Caller, typ: str, action: str, account: str | None = None) -> dict[str, Any] | None:
         d = L.find(c.details, typ)
@@ -164,7 +184,7 @@ def router(bank: Bank) -> APIRouter:
                          payment_intent_id=intent["id"])
 
     @r.post("/payments")
-    async def pay(request: Request, c: Caller = Depends(caller)):
+    async def pay(request: Request, c: Caller = Depends(payer)):
         body = await request.json()
         try:
             cents = to_cents(body["amount"])

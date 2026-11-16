@@ -28,13 +28,16 @@ class BankConfig:
     # Refresh tokens rotate. An agent that lost the response may retry with the token it just used for this long,
     # from the same key; after that, reuse pauses the grant. 0 turns the retry off.
     refresh_retry_window: int = 60
-    # Payments the bank has not confirmed or declined (a timeout, a crash): ask the bank again after this long, and
-    # release the hold only once the bank has had this long to say it never received the instruction.
+    # Payments the bank has not confirmed or declined (a timeout, a crash): ask the bank again after this long. After
+    # escalate_after, ask it to cancel-or-confirm; with no answer, the payment goes to the operations queue, still held.
+    # Nothing is released on a timer: only the bank's tombstone releases a hold (design section 5.1).
     reconcile_after: int = 30
-    abandon_after: int = 900
+    escalate_after: int = 900
     # Policy ceilings the bank allows agents (cents)
     max_monthly_limit: int = 5_000_00
     max_grant_days: int = 90
+    # Agent trust from the registry is cached this long: withdrawing trust there takes up to this long. The bank's own
+    # denylist (agents, operators, keys) has no cache: it is read from the database on every request.
     registry_cache_s: int = 60
     # Consent and approvals need a recent sign-in (seconds). How the customer proves it is the bank IdP's policy.
     step_up_max_age: int = field(default_factory=lambda: int(os.environ.get("STEP_UP_MAX_AGE", "300")))
@@ -42,8 +45,9 @@ class BankConfig:
     # Production: mTLS between the IdP and Valet instead of a shared secret.
     internal_secret: str = field(default_factory=lambda: os.environ.get("VALET_INTERNAL_SECRET", ""))
     # Native mode: a grant is bound to the agent's DPoP key at consent (the IdP passes dpop_jkt in the hand-off ticket
-    # or to /internal/grants). Binding on the first API call instead is weaker and off unless the bank turns it on,
-    # for an IdP that cannot yet pass the key: VALET_ALLOW_FIRST_USE_BINDING=1.
+    # or to /internal/grants). Binding on the first API call instead is weaker: demonstrations only. Valet refuses to
+    # start with VALET_ALLOW_FIRST_USE_BINDING=1 unless the payments adapter is the fictional one and every external
+    # token issuer is on this machine (loopback). It can never be on in a bank deployment.
     allow_first_use_binding: bool = field(
         default_factory=lambda: os.environ.get("VALET_ALLOW_FIRST_USE_BINDING", "") in ("1", "true", "yes"))
     # Consent hand-off from the bank's IdP (native mode, handoff.py). Unset secret: hand-off off.

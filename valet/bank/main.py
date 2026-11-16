@@ -21,6 +21,11 @@ def create_app(cfg: BankConfig | None = None, bank: Bank | None = None) -> FastA
     async def oauth_error(_: Request, e: OAuthError):
         return e.response()
 
+    @app.get("/readyz")
+    def readyz():
+        """Deployment checks assert on this: key binding mode, payments adapter, registry, denylist, ops queue."""
+        return bank.readiness()
+
     @app.exception_handler(consents.Problem)
     async def problem(request: Request, e: consents.Problem):
         return e.response(request)
