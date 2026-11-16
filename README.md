@@ -22,7 +22,7 @@ The proof of concept contains:
 | **Marula Bank** (`valet/bank`) | A fictional bank: a minimal OAuth 2.0 authorisation server (FAPI 2.0-aligned, conformance pending), a banking API with Valet's checks, Valet's grant service and payment intents, a fictional core banking system that executes payments, and the customer's "AI agents" screens. |
 | **Kaya** (`valet/agent`) | A fictional money-assistant agent and the small client SDK it uses. Kaya never sees a password, PIN or OTP. |
 | `demo.py` | A scripted end-to-end run: 13 steps, 24 checks, exits non-zero if any protection fails. |
-| `tests/` | 93 behaviour tests, including payment safety (retries, crashes, timeouts) and the bank's own identity provider in both deployment modes. |
+| `tests/` | 99 behaviour tests, including payment safety (retries, crashes, timeouts) and the bank's own identity provider in both deployment modes. |
 | `extensions/keycloak-valet` | A Keycloak extension (Java) for native mode: hands the customer to Valet's consent screen mid-login and puts the Valet grant id in Keycloak's tokens. |
 
 > Marula Bank, Kaya, Kaya Labs and Thandi are fictional, as are all account numbers. This is a demonstration,
@@ -249,14 +249,14 @@ To start again, stop the servers and delete the `data/` folder (or `docker compo
 | Requests cannot be swapped in the browser | PAR (RFC 9126) plus PKCE S256; `/authorize` refuses anything not pushed first | tests |
 | A stolen token is useless | DPoP (RFC 9449): the token is bound to Kaya's key (`cnf.jkt`); each proof is single-use and bound to the method, URL and token | demo 3, test |
 | A stolen authorisation code is useless, and nobody else can claim the grant | The agent names its key in the pushed request (`dpop_jkt`); the grant is bound to it when the customer consents, in both deployment modes | `test_payments.py`, `test_handoff.py`, Keycloak native run |
-| A retry, a crash or a timeout never pays twice | One payment intent per `Idempotency-Key`; Valet holds the amount and instructs the bank's payment system, idempotent on the intent id; an unanswered payment is `pending` and held, never "failed" | demo 4, `test_payments.py` |
+| A retry, a crash or a timeout never pays twice | One payment intent per `Idempotency-Key`, on the direct API and the MCP gateway alike; Valet holds the amount and instructs the bank's payment system, idempotent on the intent id; an unanswered payment is `pending` and held, never "failed" | demo 4, `test_payments.py` |
 | Valet never executes a payment | One adapter (`valet/bank/core.py`) to the bank's payments API; the PoC's is a fictional core | `test_payments.py` |
 | Spending stays inside a monthly limit in rands, only to existing beneficiaries | Rich Authorization Requests (RFC 9396) types `valet_accounts` / `valet_payments`; a monthly ledger in SAST | demo 4, 7, test |
 | Anything else needs the customer's approval, in the bank's app | The API returns `approval_required` with the exact action; the agent asks through CIBA (poll mode); the bank only accepts actions it offered | demo 5, test |
 | An approval covers one payment, exactly as shown | Single-use, 5-minute, digest-bound `valet_payment_once` token that can only finish the payment the bank held; it never adds a beneficiary, and it counts towards the month's total | demo 6, test |
 | Agents can never add beneficiaries | Hard refusal in the API, recorded | demo 8, test |
 | Pause, resume and disconnect are immediate | Grant status is checked on every API call, not only at token issue; pausing cancels pending approvals | demo 9, 12, test |
-| A copied refresh token is caught | Rotation with reuse detection; reuse pauses the grant | demo 10, test |
+| A copied refresh token is caught | Rotation with reuse detection; reuse pauses the grant. An agent that lost the response can retry for 60 seconds with the same key | demo 10, test |
 | The bank or Veridact can stop an operator everywhere at once | Registry trust is checked on every call | demo 11, test |
 | Every decision can be proven later | Hash-chained, ES256-signed receipts at the bank; tampering is detected | demo 13, test |
 | The bank's IdP can issue the agent's tokens while Valet keeps the rules; forged consent results are refused | Keycloak extension: signed ticket and result with nonce; grant id in tokens; grant bound to the agent's DPoP key at consent | `test_handoff.py`, Keycloak native run |

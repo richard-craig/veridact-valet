@@ -30,9 +30,8 @@ from ..common.crypto import digest, random_id
 from ..common.money import rand, to_cents, to_str
 from . import levels as L
 from .authz import _payment_summary, payment_detail
-from .core import CoreUnavailable, PaymentInstruction
+from .payments import HELD
 from .context import Bank
-from .store import month_key
 from .tokens import TokenRejected
 
 PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"]
@@ -105,7 +104,7 @@ def mask(number: str) -> str:
 
 def router(bank: Bank) -> APIRouter:
     r = APIRouter()
-    store, cfg = bank.store, bank.cfg
+    store, cfg, payments = bank.store, bank.cfg, bank.payments
     resource = os.environ.get("VALET_MCP_RESOURCE", cfg.issuer.rstrip("/") + "/mcp")
     prm_url = cfg.issuer.rstrip("/") + "/.well-known/oauth-protected-resource/mcp"
     store.db.executescript("CREATE TABLE IF NOT EXISTS mcp_idem (grant_id TEXT, key TEXT, result TEXT, "
@@ -173,12 +172,13 @@ def router(bank: Bank) -> APIRouter:
                                     reason_codes=list(codes), **kw)
 
     def remaining(grant: dict[str, Any]) -> int:
+        """The month's limit, less what is spent, what is held for the bank to confirm, and what waits for the customer."""
         limit = L.monthly_limit(grant["details"]) or 0
-        held = 0
+        waiting = 0
         for a in store.q("SELECT detail FROM approvals WHERE grant_id=? AND status IN ('pending','approved') "
                          "AND consumed=0 AND expires>?", grant["id"], time.time()):
-            held += to_cents(json.loads(a["detail"])["amount"]["amount"])
-        return limit - store.spent(grant["id"]) - held
+            waiting += to_cents(json.loads(a["detail"])["amount"]["amount"])
+        return limit - store.spent(grant["id"]) - payments.reserved(grant["id"]) - waiting
 
     def call_tool(name: str, args: dict[str, Any], grant: dict[str, Any], tier: str) -> dict[str, Any]:
         t = TOOLS.get(name)
@@ -239,26 +239,38 @@ def router(bank: Bank) -> APIRouter:
             cents = to_cents(args.get("amount", ""))
         except ValueError:
             return declined("INVALID_AMOUNT", "Amount must be in rands, e.g. 640.00.")
-        if cents > remaining(grant):
-            return declined("MONTHLY_LIMIT_EXCEEDED",
-                            f"{rand(cents)} would go over this month's limit of {rand(L.monthly_limit(grant['details']) or 0)} "
-                            f"(including payments already waiting for approval).")
-        pending = store.one("SELECT COUNT(*) n FROM approvals WHERE grant_id=? AND status='pending' AND expires>?",
-                            grant["id"], time.time())["n"]
-        if pending >= cfg.max_pending_approvals:
-            return declined("TOO_MANY_PENDING", "Too many payments are already waiting for the customer.")
         detail = payment_detail(frm, payee["name"], payee["account"], cents, str(args.get("reference", ""))[:20])
         aid, now = random_id("ar", 12), time.time()
         why = "Bearer-tier connector: the customer approves every payment" if tier == "bearer" else "Customer approval"
-        store.x("INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,0,0)", aid, grant["id"], grant["client_id"],
-                json.dumps(detail), digest(detail), f"{grant_name(grant)} says: {reason}"[:120], why, "pending", now,
-                now + max(cfg.approval_ttl, 600))
         out = {"outcome": "APPROVAL_REQUIRED", "payment_ref": aid,
                "message": f"Asked the customer to approve paying {payee['name']} {rand(cents)} in the Marula app. "
                           "Check with get_payment_status."}
+        # One locked step, as on the direct API (design section 5.1): check the limit against what is spent, held and
+        # waiting; record the payment intent; and bind the approval request to it.
+        refusal = None
+        with store.tx():
+            pending = store.one("SELECT COUNT(*) n FROM approvals WHERE grant_id=? AND status='pending' AND expires>?",
+                                grant["id"], now)["n"]
+            if payments.by_key(grant["id"], key):
+                refusal = ("IDEMPOTENCY_KEY_REUSED", "That idempotency_key was used for another payment. Use a new one.")
+            elif cents > remaining(grant):
+                refusal = ("MONTHLY_LIMIT_EXCEEDED",
+                           f"{rand(cents)} would go over this month's limit of {rand(L.monthly_limit(grant['details']) or 0)} "
+                           f"(including payments already waiting for approval).")
+            elif pending >= cfg.max_pending_approvals:
+                refusal = ("TOO_MANY_PENDING", "Too many payments are already waiting for the customer.")
+            else:
+                intent = payments.create(grant, key, digest(detail), detail, cents, "approval_required", "approval",
+                                         reason=why, expires=now + max(cfg.approval_ttl, 600), approval=aid,
+                                         channel="mcp_gateway")
+                store.x("INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,0,0)", aid, grant["id"], grant["client_id"],
+                        json.dumps(detail), digest(detail), f"{grant_name(grant)} says: {reason}"[:120], why, "pending",
+                        now, now + max(cfg.approval_ttl, 600))
+                store.x("INSERT OR IGNORE INTO mcp_idem VALUES (?,?,?)", grant["id"], key, json.dumps(out))
+        if refusal:
+            return declined(*refusal)
         receipt(grant, "pay_existing_payee", "held", ["CUSTOMER_APPROVAL_REQUIRED"], tier=tier, approval=aid,
-                agent_supplied_instruction=reason, detail=_payment_summary(detail))
-        store.x("INSERT OR IGNORE INTO mcp_idem VALUES (?,?,?)", grant["id"], key, json.dumps(out))
+                payment_intent=intent["id"], agent_supplied_instruction=reason, detail=_payment_summary(detail))
         return out
 
     def grant_name(grant: dict[str, Any]) -> str:
@@ -266,43 +278,42 @@ def router(bank: Bank) -> APIRouter:
         return rec.name if rec else grant["client_id"]
 
     def payment_status(grant: dict[str, Any], ref: str) -> dict[str, Any]:
+        """Where a payment stands. Once the customer has approved, this is also what moves it on: the approval is
+        spent and the intent held in one locked step, then the bank is instructed (payments.py). Asking again, or
+        twice at once, continues the same intent and never pays twice."""
         ap = store.one("SELECT * FROM approvals WHERE id=? AND grant_id=?", ref, grant["id"])
-        if not ap:
+        intent = payments.by_approval(grant["id"], ref) if ap else None
+        if not ap or not intent:
             raise ToolRefused("UNKNOWN_PAYMENT", "No such payment request for this mandate.")
-        detail = json.loads(ap["detail"])
-        if ap["status"] == "pending" and ap["expires"] > time.time():
-            return {"outcome": "APPROVAL_REQUIRED", "payment_ref": ref, "message": "Still waiting for the customer."}
-        if ap["status"] == "denied":
-            return {"outcome": "DECLINED", "reason_codes": ["CUSTOMER_DECLINED"], "message": "The customer declined."}
-        if ap["status"] != "approved":
-            return {"outcome": "DECLINED", "reason_codes": ["APPROVAL_EXPIRED"], "message": "The approval request expired."}
-        if ap["consumed"]:
-            return {"outcome": "APPROVED", "payment_ref": ref, "status": "paid", "message": "Already paid (once)."}
-        cents = to_cents(detail["amount"]["amount"])
-        # Valet never executes: it instructs the bank's core banking API, which is idempotent on the id it is given
-        # (here the approval id). A retry, or two calls at once, get the one original result and one debit.
-        try:
-            result = bank.core.execute(PaymentInstruction(
-                payment_intent_id=ref, customer=grant["customer"], from_account=detail["from"],
-                to_name=detail["to"]["name"], to_account=detail["to"]["account"], cents=cents,
-                reference=detail.get("reference", ""), by_agent=grant["client_id"]))
-        except CoreUnavailable:
-            return {"outcome": "APPROVAL_REQUIRED", "payment_ref": ref,
-                    "message": "The bank has not confirmed this payment yet. It may have been paid. "
-                               "Check again with get_payment_status; do not send it again."}
-        if result.status != "paid":
-            return {"outcome": "DECLINED", "reason_codes": ["INSUFFICIENT_FUNDS" if result.reason == "insufficient_funds"
-                                                            else "BANK_DECLINED"], "message": "Not enough money."
-                    if result.reason == "insufficient_funds" else "The bank declined this payment."}
-        with store.tx():
-            if store.db.execute("UPDATE approvals SET consumed=1 WHERE id=? AND consumed=0", (ref,)).rowcount != 1:
-                return {"outcome": "APPROVED", "payment_ref": ref, "status": "paid", "message": "Already paid (once)."}
-            store.db.execute("INSERT INTO ledger VALUES (?,?,?) ON CONFLICT(grant_id,month) DO UPDATE SET "
-                             "spent=spent+excluded.spent", (grant["id"], month_key(), cents))
-        rec = receipt(grant, "payment", "allowed", ["CUSTOMER_APPROVED"], approval=ref, detail=_payment_summary(detail),
-                      bank_payment_id=result.bank_payment_id, intent_evidence="customer_confirmed")
-        return {"outcome": "APPROVED", "payment_ref": ref, "status": "paid", "paid": f"{detail['to']['name']} {rand(cents)}",
-                "receipt": rec["hash"]}
+        first = False
+        if intent["status"] == "approval_required":
+            if ap["status"] == "pending" and ap["expires"] > time.time():
+                return {"outcome": "APPROVAL_REQUIRED", "payment_ref": ref, "message": "Still waiting for the customer."}
+            if ap["status"] == "denied":
+                return {"outcome": "DECLINED", "reason_codes": ["CUSTOMER_DECLINED"], "message": "The customer declined."}
+            if ap["status"] != "approved":
+                return {"outcome": "DECLINED", "reason_codes": ["APPROVAL_EXPIRED"], "message": "The approval request expired."}
+            with store.tx():
+                first = (store.db.execute("UPDATE approvals SET consumed=1 WHERE id=? AND consumed=0", (ref,)).rowcount == 1
+                         and payments.reserve_approved(intent, ref))
+            intent = payments.get(intent["id"])
+        if intent["status"] in HELD:                              # just approved, or the bank has not answered yet
+            first = True
+            intent = payments.execute(intent, grant)
+        if intent["status"] == "confirmed":
+            out = {"outcome": "APPROVED", "payment_ref": ref, "status": "paid"}
+            if not first:
+                return out | {"message": "Already paid (once)."}
+            d = intent["detail"]
+            return out | {"paid": f"{d['to']['name']} {rand(intent['amount'])}",
+                          "receipt": (intent["outcome"] or {}).get("body", {}).get("receipt")}
+        if intent["status"] == "failed":
+            funds = intent["reason"] == "insufficient_funds"
+            return {"outcome": "DECLINED", "reason_codes": ["INSUFFICIENT_FUNDS" if funds else "BANK_DECLINED"],
+                    "message": "Not enough money." if funds else "The bank declined this payment."}
+        return {"outcome": "APPROVED", "payment_ref": ref, "status": "pending",
+                "message": "The customer approved, but the bank has not confirmed the payment yet. It may have been "
+                           "paid. Check again with get_payment_status; do not send it again."}
 
     # ------------------------------------------------------------ JSON-RPC over Streamable HTTP
     def rpc_result(mid: Any, result: Any, headers: dict[str, str] | None = None) -> Response:

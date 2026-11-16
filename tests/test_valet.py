@@ -221,6 +221,11 @@ def test_revoke_is_final():
     run(t())
 
 
+def used_ago(h: Harness, seconds: int) -> None:
+    """Age every used refresh token, as if it was used `seconds` ago."""
+    h.bank.store.x("UPDATE refresh SET used=used-? WHERE used>0", seconds)
+
+
 def test_refresh_rotation_and_reuse_detection():
     async def t():
         h = Harness()
@@ -228,6 +233,59 @@ def test_refresh_rotation_and_reuse_detection():
         old = h.kaya.session.refresh_token
         await h.kaya.refresh()
         assert h.kaya.session.refresh_token != old
+        used_ago(h, 61)                                             # past the retry window
+        h.kaya.session.refresh_token = old
+        assert (await err(h.kaya.refresh())).error == "invalid_grant"
+        assert h.bank.store.grant(gid)["status"] == "paused"
+    run(t())
+
+
+def test_an_agent_that_lost_the_refresh_response_can_retry_briefly_with_the_same_key():
+    async def t():
+        h = Harness()
+        gid = await h.connect()
+        old = h.kaya.session.refresh_token
+        await h.kaya.refresh()
+        never_received = h.kaya.session.refresh_token             # pretend this response was lost
+        h.kaya.session.refresh_token = old
+        await h.kaya.refresh()                                      # retry inside the window: a new pair
+        assert h.bank.store.grant(gid)["status"] == "active" and await h.kaya.accounts()
+        assert h.kaya.session.refresh_token not in (old, never_received)
+        assert any(r["action"] == "refresh" and r["outcome"] == "retried" for r in h.bank.receipts.for_grant(gid))
+        # the successor that was never received is withdrawn: one grant never has two live refresh tokens
+        good, h.kaya.session.refresh_token = h.kaya.session.refresh_token, never_received
+        assert (await err(h.kaya.refresh())).error == "invalid_grant"
+        assert h.bank.store.grant(gid)["status"] == "active"       # an unknown token pauses nothing
+        h.kaya.session.refresh_token = good
+        await h.kaya.refresh()
+    run(t())
+
+
+def test_a_copied_refresh_token_from_another_key_pauses_the_grant_even_inside_the_window():
+    async def t():
+        from valet.common.crypto import Key
+        h = Harness()
+        gid = await h.connect()
+        old = h.kaya.session.refresh_token
+        await h.kaya.refresh()
+        # a thief with the old token and the agent's client credentials, but not its DPoP key
+        real_sign, thief = h.kaya.key.sign, Key.generate()
+        h.kaya.key = type("K", (), {"sign": lambda self, claims, headers=None: (
+            thief.sign(claims, headers) if (headers or {}).get("typ") == "dpop+jwt" else real_sign(claims, headers)),
+            "jwk": thief.jwk, "thumbprint": thief.thumbprint})()
+        h.kaya.session.refresh_token = old
+        assert (await err(h.kaya.refresh())).error == "invalid_grant"
+        assert h.bank.store.grant(gid)["status"] == "paused"
+    run(t())
+
+
+def test_the_retry_window_can_be_turned_off():
+    async def t():
+        h = Harness(refresh_retry_window=0)
+        gid = await h.connect()
+        old = h.kaya.session.refresh_token
+        await h.kaya.refresh()
+        used_ago(h, 1)
         h.kaya.session.refresh_token = old
         assert (await err(h.kaya.refresh())).error == "invalid_grant"
         assert h.bank.store.grant(gid)["status"] == "paused"
