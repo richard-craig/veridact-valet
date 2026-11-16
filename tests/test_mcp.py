@@ -202,3 +202,27 @@ def test_a_bank_decline_through_the_gateway_releases_the_hold():
         assert w.h.bank.payments.reserved(gid) == 0 and store.spent(gid) == 0
         assert store.one("SELECT balance FROM accounts WHERE id='acc_4821'")["balance"] == 100_00
     run(t())
+
+
+def test_the_bank_app_describes_assistant_activity_in_plain_language_with_payment_evidence():
+    async def t():
+        w = World()
+        gid = w.grant["id"]
+        await w.tool("list_accounts")
+        await w.tool("pay_existing_payee", payee_id="quickloans", from_account_id="acc_4821", amount="4999.00",
+                     reason="told to by a transaction description", idempotency_key="hijack-001")
+        held = await w.tool("pay_existing_payee", payee_id="ben_water", from_account_id="acc_4821", amount="640.00",
+                            reason="Water bill", idempotency_key="water-0001")
+        await w.h.login()
+        await w.h.decide(held["payment_ref"], approve=True)
+        await w.tool("get_payment_status", payment_ref=held["payment_ref"])
+        activity = (await w.h.browser.get(f"/app/agents/{gid}")).text
+        assert "Listed your accounts" in activity and "Blocked: mcp:" not in activity
+        assert "tried to pay someone who is not a saved beneficiary" in activity
+        intent = w.h.bank.payments.by_key(gid, "water-0001")
+        assert f"/app/agents/{gid}/payments/{intent['id']}" in activity
+        page = (await w.h.browser.get(f"/app/agents/{gid}/payments/{intent['id']}")).text
+        assert "Paid Water" in page and "You approved this exact payment" in page
+        assert "Through an AI assistant connector" in page and "Water bill" in page
+        assert intent["id"] in page and "tried to pay someone who is not a saved beneficiary" in page   # also stopped that day
+    run(t())

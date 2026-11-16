@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -21,6 +22,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..common.money import rand, to_cents
 from . import levels as L
+from .config import SAST
 from .idp import SignInError
 
 COOKIE = "marula_session"
@@ -79,12 +81,50 @@ def render(request: Request, template: str, bank, status: int = 200, **ctx: Any)
     return HTMLResponse(html, status_code=status)
 
 
+_CONNECTOR_READS = {"list_accounts": "Listed your accounts", "get_balance": "Checked a balance",
+                    "list_transactions": "Read transactions", "list_payees": "Listed your saved beneficiaries",
+                    "get_payment_status": "Checked on a payment"}
+_CONNECTOR_REFUSALS = {
+    "PAYEE_NOT_IN_MANDATE": ("Blocked: tried to pay someone who is not a saved beneficiary", "Nothing was paid"),
+    "MONTHLY_LIMIT_EXCEEDED": ("Blocked: over your monthly limit", "Nothing was paid"),
+    "ACCOUNT_NOT_IN_MANDATE": ("Blocked: an account you did not share", "Nothing was shared or paid"),
+    "TOOL_NOT_IN_MANDATE": ("Blocked: not allowed by your settings", "Nothing changed"),
+    "TOO_MANY_PENDING": ("Blocked: too many payments already waiting for you", "Nothing was paid"),
+    "MANDATE_PAUSED": ("Blocked while paused", "Nothing was shared or paid"),
+    "MANDATE_REVOKED": ("Blocked after you disconnected", "Nothing was shared or paid"),
+    "MANDATE_EXPIRED": ("Blocked: this connection has expired", "Nothing was shared or paid"),
+    "AGENT_UNTRUSTED": ("Blocked: the bank no longer trusts this assistant", "Nothing was shared or paid"),
+}
+
+
+def _describe_connector(tool: str, outcome: str, to: str, amt: str, rec: dict[str, Any]) -> dict[str, str]:
+    """A line for something an assistant did through the MCP gateway (Claude and similar)."""
+    if outcome == "allowed":
+        return {"title": _CONNECTOR_READS.get(tool, "Read information"), "sub": "Allowed by your settings", "kind": "ok"}
+    if outcome == "held":
+        return {"title": f"Asked you to approve {to}{amt}", "sub": "Sent to your Marula app", "kind": "held"}
+    code = (rec.get("reason_codes") or [""])[0]
+    title, sub_ = _CONNECTOR_REFUSALS.get(code, ("Blocked: a request outside your settings", "Nothing changed"))
+    return {"title": title + (amt if tool == "pay_existing_payee" else ""), "sub": sub_, "kind": "blocked"}
+
+
+def when(value: Any) -> str:
+    """A receipt time (ISO text) or a stored timestamp, as the customer reads it: 16 Nov 2026, 10:42."""
+    t = datetime.fromisoformat(value) if isinstance(value, str) else datetime.fromtimestamp(value, SAST)
+    return f"{t.day} {t.strftime('%b %Y, %H:%M')}"
+
+
 def describe(rec: dict[str, Any]) -> dict[str, str]:
     """Turn a receipt into a line a customer understands."""
     a, o, b = rec.get("action"), rec.get("outcome"), rec.get("basis")
     d = rec.get("detail") or {}
-    amt = f" · {rand(to_cents(d['amount']))}" if d.get("amount") else ""
+    try:
+        amt = f" · {rand(to_cents(d['amount']))}" if d.get("amount") else ""
+    except ValueError:
+        amt = ""
     to = d.get("to", "")
+    if str(a).startswith("mcp:"):
+        return _describe_connector(str(a)[4:], o, to, amt, rec)
     if a == "connect":
         return {"title": "Connected", "sub": d.get("summary", ""), "kind": "info"}
     if a == "payment" and o == "allowed":
@@ -226,10 +266,92 @@ def router(bank) -> APIRouter:
             return HTMLResponse("Not found", status_code=404)
         acct = store.one("SELECT * FROM accounts WHERE id=?", L.find(g["details"], "valet_accounts")["accounts"][0])
         summary = L.plain_summary(g["level"], g["details"], f"{acct['name']} {acct['number']}", bank.cfg.max_grant_days)
-        items = [{**describe(x), "time": x["time"][11:16], "date": x["time"][:10], "hash": x["hash"][:19]}
+        # A line about a payment opens its evidence page: every record the bank holds for that one payment.
+        held_for = {i["approval"]: i["id"] for i in bank.payments.for_grant(gid) if i["approval"]}
+        items = [{**describe(x), "time": x["time"][11:16], "date": x["time"][:10], "hash": x["hash"][:19],
+                  "payment": x.get("payment_intent") or held_for.get(x.get("approval"))}
                  for x in bank.receipts.for_grant(gid)]
         return render(request, "agent.html", bank, customer=cus, g=grant_view(g), summary=summary, items=items,
                       csrf=csrf_token(bank, cus["id"]))
+
+    @r.get("/app/agents/{gid}/payments/{intent_id}", response_class=HTMLResponse)
+    def payment_evidence(request: Request, gid: str, intent_id: str):
+        """Everything the bank holds about one payment an agent asked for, on one page, in plain language:
+        who asked, under what authority, whose decision it was, and what the bank did (design section 8.1)."""
+        cus, redirect = need_login(request)
+        if redirect:
+            return redirect
+        g = owned_grant(cus, gid)
+        intent = bank.payments.get(intent_id) if g else None
+        if not g or not intent or intent["grant_id"] != gid:
+            return HTMLResponse("Not found", status_code=404)
+        d, agent = intent["detail"], bank.registry.lookup(g["client_id"])
+        acct = store.one("SELECT * FROM accounts WHERE id=?", d["from"])
+        shared = store.one("SELECT * FROM accounts WHERE id=?", L.find(g["details"], "valet_accounts")["accounts"][0])
+        records = list(reversed(bank.receipts.for_grant(gid)))                        # oldest first
+        mine = [x for x in records if x.get("payment_intent") == intent_id
+                or (intent["approval"] and x.get("approval") == intent["approval"])]
+        connect = next((x for x in records if x["action"] == "connect"), None)
+        ap = store.one("SELECT * FROM approvals WHERE id=?", intent["approval"] or "")
+        decided = next((x for x in mine if x["action"] == "approval_decision"), None)
+        asked = next((x for x in mine if x.get("agent_supplied_instruction")), None)
+
+        state = intent["status"]
+        to, amount = d["to"]["name"], rand(intent["amount"])
+        headline = {"confirmed": f"Paid {to}", "failed": f"Not paid: {to}", "approval_required": f"Not paid: {to}",
+                    }.get(state, f"Waiting for the bank to confirm {to}")
+        if state == "confirmed" and intent["basis"] == "approval":
+            decision = {"title": "You approved this exact payment", "kind": "approved",
+                        "text": (f"You approved it in the {bank.cfg.bank_name} app on {when(decided['time'])}, after "
+                                 "signing in again. " if decided else "You approved it through the bank's own approval step. ")
+                                + "The approval covered this one payment only."}
+        elif intent["basis"] == "grant" and state != "approval_required":
+            decision = {"title": "Inside your standing limit", "kind": "ok",
+                        "text": "This payment was to a saved beneficiary and inside the monthly limit you set, so the "
+                                "bank did not ask you to approve it."}
+        else:
+            words = {"denied": "You declined this payment.", "approved": "You approved this exact payment.",
+                     "pending": "Waiting for your decision.", "cancelled": "The request was cancelled.",
+                     "expired": "The request ran out before you answered."}
+            status = ap["status"] if ap else None
+            if status == "pending" and ap["expires"] < time.time():
+                status = "expired"
+            decision = {"title": "Sent to you for approval", "kind": "held",
+                        "text": words.get(status, "The agent has not asked you to approve it yet.")}
+        did = {"confirmed": "Paid once, by the bank's own payment system.",
+               "failed": {"insufficient_funds": "Not paid: there was not enough money in the account.",
+                          "not_received_by_the_bank": "Not paid: the instruction never reached the payment system."
+                          }.get(intent["reason"] or "", "Not paid: the bank's payment system declined it."),
+               "approval_required": "Nothing was paid. The bank held the payment and asked you first.",
+               }.get(state, "The bank's payment system has not confirmed this payment yet. The amount is held "
+                            "against your limit until it does.")
+        day = mine[0]["time"][:10] if mine else None
+        nearby = [x for x in records if x not in mine and x["time"][:10] == day
+                  and x.get("outcome") in ("refused", "held") and x.get("action") not in ("approval_request",)]
+        chain = bank.receipts.verify_chain()
+        view = {
+            "id": intent_id, "headline": headline, "amount": amount, "state": state,
+            "paid": state == "confirmed", "to": to, "to_account": d["to"]["account"],
+            "from": f"{acct['name']} {acct['number']}" if acct else d["from"], "reference": d.get("reference", ""),
+            "asked_at": when(intent["created"]), "settled_at": when(intent["updated"]) if state in ("confirmed", "failed") else None,
+            "channel": ("Through an AI assistant connector. The bank knows the assistant platform, not an individual agent."
+                        if intent["channel"] == "mcp_gateway" else
+                        "Directly, with every request signed by the agent's own key."),
+            "key": (g["jkt"] or "")[:16], "connected_at": when(connect["time"]) if connect else None,
+            "mandate": L.plain_summary(g["level"], g["details"], f"{shared['name']} {shared['number']}", bank.cfg.max_grant_days),
+            "consent_hash": (g["consent_hash"] or "")[:26],
+            "decision": decision, "why": ap["reason"] if ap else intent["reason"], "note": ap["message"] if ap else None,
+            "instruction": asked.get("agent_supplied_instruction") if asked else None,
+            "did": did, "bank_payment_id": intent["bank_payment_id"], "request_ref": intent["idem_key"],
+            "evidence": {"standing_mandate": "Standing mandate: the record shows the payment was within what you allowed.",
+                         "customer_confirmed": "Customer confirmed: the record shows you approved this exact payment."
+                         }["customer_confirmed" if intent["basis"] == "approval" and state == "confirmed" else "standing_mandate"]
+                        if state == "confirmed" else None,
+            "timeline": [{**describe(x), "when": when(x["time"]), "hash": x["hash"][:19]} for x in mine],
+            "nearby": [{**describe(x), "when": when(x["time"])} for x in nearby[:5]],
+            "chain_ok": chain["ok"], "records": len(mine),
+        }
+        return render(request, "payment_evidence.html", bank, customer=cus, g=grant_view(g), agent=agent, p=view)
 
     @r.post("/app/agents/{gid}/{action}")
     async def agent_action(request: Request, gid: str, action: str):

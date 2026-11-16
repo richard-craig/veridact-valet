@@ -22,7 +22,7 @@ The proof of concept contains:
 | **Marula Bank** (`valet/bank`) | A fictional bank: a minimal OAuth 2.0 authorisation server (FAPI 2.0-aligned, conformance pending), a banking API with Valet's checks, Valet's grant service and payment intents, a fictional core banking system that executes payments, and the customer's "AI agents" screens. |
 | **Kaya** (`valet/agent`) | A fictional money-assistant agent and the small client SDK it uses. Kaya never sees a password, PIN or OTP. |
 | `demo.py` | A scripted end-to-end run: 13 steps, 24 checks, exits non-zero if any protection fails. |
-| `tests/` | 99 behaviour tests, including payment safety (retries, crashes, timeouts) and the bank's own identity provider in both deployment modes. |
+| `tests/` | 102 behaviour tests, including payment safety (retries, crashes, timeouts) and the bank's own identity provider in both deployment modes. |
 | `extensions/keycloak-valet` | A Keycloak extension (Java) for native mode: hands the customer to Valet's consent screen mid-login and puts the Valet grant id in Keycloak's tokens. |
 
 > Marula Bank, Kaya, Kaya Labs and Thandi are fictional, as are all account numbers. This is a demonstration,
@@ -232,7 +232,8 @@ docker compose -f docker-compose.yml -f docker-compose.keycloak.yml up --build
      and approve. Kaya picks it up within a few seconds and pays once.
    - **Pay school fees** is over the monthly limit, so it is held for approval too. Try declining it.
    - **Add QuickLoans as a beneficiary** is refused. Agents can never add beneficiaries.
-5. In Marula Bank, go to **AI agents › Kaya** to see every action with its receipt hash. Tap **Pause Kaya**, then try
+5. In Marula Bank, go to **AI agents › Kaya** to see every action with its receipt hash. Tap any payment for its
+   evidence page: who asked, what you allowed, whose decision it was and what the bank did. Tap **Pause Kaya**, then try
    anything in Kaya: it is refused on the very next call. Resume, then **Disconnect** to end it for good.
 6. <http://localhost:8000/ops> plays the bank (or Veridact): withdraw trust in Kaya's operator and every grant for
    Kaya stops at once. The page also verifies the receipt chain.
@@ -259,6 +260,7 @@ To start again, stop the servers and delete the `data/` folder (or `docker compo
 | A copied refresh token is caught | Rotation with reuse detection; reuse pauses the grant. An agent that lost the response can retry for 60 seconds with the same key | demo 10, test |
 | The bank or Veridact can stop an operator everywhere at once | Registry trust is checked on every call | demo 11, test |
 | Every decision can be proven later | Hash-chained, ES256-signed receipts at the bank; tampering is detected | demo 13, test |
+| A disputed payment can be explained on one screen | The payment evidence page in the bank app: who asked, what the customer allowed, whose decision it was, what the bank did and its payment reference | test |
 | The bank's IdP can issue the agent's tokens while Valet keeps the rules; forged consent results are refused | Keycloak extension: signed ticket and result with nonce; grant id in tokens; grant bound to the agent's DPoP key at consent | `test_handoff.py`, Keycloak native run |
 | The bank's own IdP signs customers in, and consent and approvals need a fresh sign-in | OIDC relying party (code + PKCE, nonce, JWKS-checked ID token); `max_age=0` step-up with `auth_time` checked | `test_idps.py`, Keycloak run |
 | Tokens from the bank's own authorisation server get exactly the same checks | Verified with the issuer's keys; consent is the grant registered with Valet, so tokens cannot widen it | `test_idps.py` |
