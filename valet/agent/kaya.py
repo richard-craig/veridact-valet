@@ -135,7 +135,7 @@ def create_kaya_app(bank_url: str | None = None, public_bank_url: str | None = N
             elif res["outcome"] == "pending":
                 say("kaya", "You approved it, but Marula hasn't confirmed the payment yet. I won't send it again.", "held")
                 state["approval"] = None
-            elif res["outcome"] in ("declined", "expired", "error"):
+            elif res["outcome"] in ("declined", "cancelled", "expired", "error"):
                 say("kaya", f"The payment was {res['outcome']}. I haven't paid anything.", "blocked")
                 state["approval"] = None
         return RedirectResponse("/", 303)

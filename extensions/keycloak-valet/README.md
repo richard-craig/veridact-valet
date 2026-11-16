@@ -72,7 +72,7 @@ Approvals keep running through Valet (its CIBA endpoint), because Keycloak's CIB
 authorisation code to that key, and this extension copies the thumbprint into the hand-off ticket, so Valet binds the
 grant to the agent's key when the customer consents. A token for the grant bound to any other key is refused, and
 Valet's approval tokens only go to the bound key. An agent that sends no `dpop_jkt` gets a grant Valet's API will not
-honour, unless the bank sets `VALET_ALLOW_FIRST_USE_BINDING=1` on Valet (binding on the first call: weaker).
+honour, unless `VALET_ALLOW_FIRST_USE_BINDING=1` is set on Valet (binding on the first call: weaker). That setting is for demos only: Valet refuses to start with it unless the payments adapter is the fictional core and Keycloak is on a loopback address. In a bank, use federated mode until the IdP can pass the key.
 Clients on the MCP gateway's bearer tier send no key and are held to that tier's ceiling.
 
 ## What has been tested

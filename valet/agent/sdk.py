@@ -215,14 +215,16 @@ class ValetClient:
                     "expires_in": body["expires_in"], "interval": body["interval"]}
 
     async def check_approval(self, auth_req_id: str) -> dict[str, Any]:
-        """Poll once. Returns pending, denied, expired, or the completed payment."""
+        """Poll once. Returns pending, declined, cancelled, expired, or the completed payment."""
         try:
             body = await self._post_form("/token", {"grant_type": CIBA_GRANT, "auth_req_id": auth_req_id}, dpop=True)
         except ValetError as e:
             if e.error in ("authorization_pending", "slow_down"):
                 return {"outcome": "approval_pending", "auth_req_id": auth_req_id}
             if e.error == "access_denied":
-                return {"outcome": "declined", "auth_req_id": auth_req_id}
+                # cancelled: the customer paused or disconnected the assistant; ask again once they resume
+                cancelled = "cancelled" in (e.body.get("error_description") or "")
+                return {"outcome": "cancelled" if cancelled else "declined", "auth_req_id": auth_req_id}
             if e.error == "expired_token":
                 return {"outcome": "expired", "auth_req_id": auth_req_id}
             raise

@@ -26,9 +26,13 @@ class AgentRecord:
     platform: bool = False        # an AI platform's OAuth client (e.g. Claude) reaching the bank via the MCP gateway
 
 
+class RegistryUnavailable(Exception):
+    """The registry could not be read and the bank's rule says not to rely on the last copy for this request."""
+
+
 class AgentRegistry(Protocol):
     def lookup(self, client_id: str) -> AgentRecord | None: ...
-    def is_trusted(self, client_id: str) -> bool: ...
+    def is_trusted(self, client_id: str, for_payment: bool = False) -> bool: ...
 
 
 class StaticRegistry:
@@ -38,15 +42,29 @@ class StaticRegistry:
         self.dir = data_dir
         self.cache_s = cache_s
         self._cache: dict[str, Any] = {}
-        self._loaded = 0.0
+        self._loaded = 0.0                      # when the last good copy was read
+        self.unavailable_since: float | None = None
         self._overrides: dict[str, bool] = {}   # bank or Veridact revocation, for the demo
 
     def _load(self) -> dict[str, Any]:
-        if time.time() - self._loaded > self.cache_s or not self._cache:
+        """The trust list, refreshed when the cache is older than `cache_s`. If the refresh fails, the last good copy
+        is kept and the registry is marked unavailable: payments fail closed at once, reads may use the last copy
+        for one more cache period (design section 9)."""
+        if time.time() - self._loaded > self.cache_s or not self._loaded:
             trust_file = self.dir / "trust.json"
-            self._cache = json.loads(trust_file.read_text()) if trust_file.exists() else {}
-            self._loaded = time.time()
+            try:
+                self._cache = json.loads(trust_file.read_text()) if trust_file.exists() else {}
+                self._loaded, self.unavailable_since = time.time(), None
+            except (OSError, ValueError):
+                self.unavailable_since = self.unavailable_since or time.time()
         return self._cache
+
+    def check_available(self, for_payment: bool) -> None:
+        self._load()
+        if self.unavailable_since is None:
+            return
+        if for_payment or time.time() - self._loaded > 2 * self.cache_s or not self._loaded:
+            raise RegistryUnavailable("the agent registry cannot be reached")
 
     def lookup(self, client_id: str) -> AgentRecord | None:
         entry = self._load().get(client_id)
@@ -63,7 +81,8 @@ class StaticRegistry:
                            verified=bool(entry.get("verified")), jwk=pub["jwk"],
                            redirect_uris=pub.get("redirect_uris", []))
 
-    def is_trusted(self, client_id: str) -> bool:
+    def is_trusted(self, client_id: str, for_payment: bool = False) -> bool:
+        self.check_available(for_payment)
         if client_id in self._overrides:
             return self._overrides[client_id]
         rec = self.lookup(client_id)

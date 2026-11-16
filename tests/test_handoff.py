@@ -121,8 +121,8 @@ def test_handoff_is_off_without_a_secret():
     run(t())
 
 
-def native(**kw) -> tuple[Harness, MockIdP]:
-    idp = MockIdP(issuer="http://kc.test/realms/marula")
+def native(issuer: str = "http://kc.test/realms/marula", **kw) -> tuple[Harness, MockIdP]:
+    idp = MockIdP(issuer=issuer)
     ext = {idp.issuer: ExternalIssuer(issuer=idp.issuer, audience="marula-api", jwks=idp.jwks)}
     return harness(external_issuers=ext, **kw), idp
 
@@ -172,7 +172,10 @@ def test_a_grant_with_no_key_is_refused_unless_the_bank_allows_binding_at_first_
         assert h.bank.store.grant(gid)["jkt"] is None                            # and the call did not bind it
 
         # the bank turns on first-use binding for an IdP that cannot pass the key: weaker, and recorded as such
-        h, idp = native(allow_first_use_binding=True)
+        # only for a demo: the fictional payments adapter and an identity platform on this machine
+        h, idp = native("http://127.0.0.1:8080/realms/marula", allow_first_use_binding=True)
+        assert h.bank.key_binding == "first_use_demo_only"
+        assert (await h.browser.get("/readyz")).json()["key_binding"] == "first_use_demo_only"
         gid = result_of((await decide(h, ticket())).text)["grant_id"]
         use(h, idp, gid)
         assert await h.kaya.accounts()
@@ -182,4 +185,27 @@ def test_a_grant_with_no_key_is_refused_unless_the_bank_allows_binding_at_first_
         with pytest.raises(ValetError) as ei:
             await h.kaya.accounts()
         assert ei.value.status == 401
+    run(t())
+
+
+def test_first_use_binding_refuses_to_start_outside_a_demo():
+    with pytest.raises(RuntimeError, match="demo"):
+        native(allow_first_use_binding=True)                                    # a remote identity platform
+    h, _ = native()
+    assert h.bank.key_binding == "at_consent"
+
+
+def test_a_native_grant_only_accepts_tokens_from_the_issuer_it_was_made_with():
+    async def t():
+        a, b = MockIdP(issuer="http://kc.test/realms/marula"), MockIdP(issuer="http://kc.test/realms/other")
+        ext = {i.issuer: ExternalIssuer(issuer=i.issuer, audience="marula-api", jwks=i.jwks) for i in (a, b)}
+        h = harness(external_issuers=ext)
+        gid = result_of((await decide(h, ticket(token_issuer=a.issuer, dpop_jkt=h.kaya.key.thumbprint))).text)["grant_id"]
+        assert h.bank.store.grant(gid)["issuer"] == a.issuer
+        use(h, a, gid)
+        assert await h.kaya.accounts()
+        use(h, b, gid)                                                           # same grant id, another platform
+        with pytest.raises(ValetError) as ei:
+            await h.kaya.accounts()
+        assert ei.value.status == 401 and "different issuer" in str(ei.value)
     run(t())

@@ -22,7 +22,7 @@ The proof of concept contains:
 | **Marula Bank** (`valet/bank`) | A fictional bank: a minimal OAuth 2.0 authorisation server (FAPI 2.0-aligned, conformance pending), a banking API with Valet's checks, Valet's grant service and payment intents, a fictional core banking system that executes payments, and the customer's "AI agents" screens. |
 | **Kaya** (`valet/agent`) | A fictional money-assistant agent and the small client SDK it uses. Kaya never sees a password, PIN or OTP. |
 | `demo.py` | A scripted end-to-end run: 13 steps, 24 checks, exits non-zero if any protection fails. |
-| `tests/` | 102 behaviour tests, including payment safety (retries, crashes, timeouts) and the bank's own identity provider in both deployment modes. |
+| `tests/` | 115 behaviour tests, including payment safety (retries, crashes, timeouts, cancel-or-confirm, pause mid-payment) and the bank's own identity provider in both deployment modes. |
 | `extensions/keycloak-valet` | A Keycloak extension (Java) for native mode: hands the customer to Valet's consent screen mid-login and puts the Valet grant id in Keycloak's tokens. |
 
 > Marula Bank, Kaya, Kaya Labs and Thandi are fictional, as are all account numbers. This is a demonstration,
@@ -256,9 +256,10 @@ To start again, stop the servers and delete the `data/` folder (or `docker compo
 | Anything else needs the customer's approval, in the bank's app | The API returns `approval_required` with the exact action; the agent asks through CIBA (poll mode); the bank only accepts actions it offered | demo 5, test |
 | An approval covers one payment, exactly as shown | Single-use, 5-minute, digest-bound `valet_payment_once` token that can only finish the payment the bank held; it never adds a beneficiary, and it counts towards the month's total | demo 6, test |
 | Agents can never add beneficiaries | Hard refusal in the API, recorded | demo 8, test |
-| Pause, resume and disconnect are immediate | Grant status is checked on every API call, not only at token issue; pausing cancels pending approvals | demo 9, 12, test |
+| Pause, resume and disconnect are immediate | Grant status is checked on every API call, not only at token issue; pausing cancels every approval and payment the bank has not accepted, including approved-but-unsent ones, and resuming needs a fresh approval | demo 9, 12, `test_stopping.py` |
+| A held payment is released only when the bank says it is dead | Cancel-or-confirm: the bank tombstones the instruction or reports it already paid; no answer goes to an operations queue, still held | `test_stopping.py` |
 | A copied refresh token is caught | Rotation with reuse detection; reuse pauses the grant. An agent that lost the response can retry for 60 seconds with the same key | demo 10, test |
-| The bank or Veridact can stop an operator everywhere at once | Registry trust is checked on every call | demo 11, test |
+| The bank or Veridact can stop an operator everywhere | The bank's denylist stops a client, operator or key on the next request; registry trust is checked on every call (60-second cache); an unreachable registry stops payments at once | demo 11, `test_stopping.py` |
 | Every decision can be proven later | Hash-chained, ES256-signed receipts at the bank; tampering is detected | demo 13, test |
 | A disputed payment can be explained on one screen | The payment evidence page in the bank app: who asked, what the customer allowed, whose decision it was, what the bank did and its payment reference | test |
 | The bank's IdP can issue the agent's tokens while Valet keeps the rules; forged consent results are refused | Keycloak extension: signed ticket and result with nonce; grant id in tokens; grant bound to the agent's DPoP key at consent | `test_handoff.py`, Keycloak native run |

@@ -31,6 +31,7 @@ from ..common.money import rand, to_cents, to_str
 from . import levels as L
 from .authz import _payment_summary, payment_detail
 from .payments import HELD
+from .registry import RegistryUnavailable
 from .context import Bank
 from .tokens import TokenRejected
 
@@ -307,6 +308,10 @@ def router(bank: Bank) -> APIRouter:
             d = intent["detail"]
             return out | {"paid": f"{d['to']['name']} {rand(intent['amount'])}",
                           "receipt": (intent["outcome"] or {}).get("body", {}).get("receipt")}
+        if intent["status"] == "cancelled":
+            return {"outcome": "DECLINED", "reason_codes": ["CANCELLED"], "payment_ref": ref,
+                    "message": "This payment was cancelled before the bank accepted it (the customer paused or "
+                               "disconnected this assistant). Nothing was paid. Ask again if it is still needed."}
         if intent["status"] == "failed":
             funds = intent["reason"] == "insufficient_funds"
             return {"outcome": "DECLINED", "reason_codes": ["INSUFFICIENT_FUNDS" if funds else "BANK_DECLINED"],
@@ -364,7 +369,21 @@ def router(bank: Bank) -> APIRouter:
                     {"outcome": "DECLINED", "reason_codes": [code],
                      "message": f"The customer's mandate is {grant['status']}. Nothing can be done until they "
                                 "change it in the Marula app."})}]})
-            if not bank.registry.is_trusted(grant["client_id"]):
+            why = bank.denied(grant["client_id"])
+            if why:
+                receipt(grant, name, "refused", ["AGENT_DENIED"], tier=tier)
+                return rpc_result(mid, {"isError": True, "content": [{"type": "text", "text": json.dumps(
+                    {"outcome": "DECLINED", "reason_codes": ["AGENT_DENIED"],
+                     "message": "The bank has stopped this assistant."})}]})
+            try:
+                trusted = bank.registry.is_trusted(grant["client_id"],
+                                                   for_payment=name in ("pay_existing_payee", "get_payment_status"))
+            except RegistryUnavailable:
+                receipt(grant, name, "refused", ["REGISTRY_UNAVAILABLE"], tier=tier)
+                return rpc_result(mid, {"isError": True, "content": [{"type": "text", "text": json.dumps(
+                    {"outcome": "DECLINED", "reason_codes": ["REGISTRY_UNAVAILABLE"],
+                     "message": "The bank cannot check this assistant right now. Try again later."})}]})
+            if not trusted:
                 receipt(grant, name, "refused", ["AGENT_UNTRUSTED"], tier=tier)
                 return rpc_result(mid, {"isError": True, "content": [{"type": "text", "text": json.dumps(
                     {"outcome": "DECLINED", "reason_codes": ["AGENT_UNTRUSTED"],

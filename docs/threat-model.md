@@ -98,11 +98,13 @@ flowchart LR
 | Approval flood limit | At most 3 pending approvals per grant; each expires in 5 minutes | **Built** |
 | Idempotency, end to end | Payments require an idempotency key; one payment intent per key; the intent id is the idempotency key Valet gives the bank's payments API, so a retry after a crash or a timeout returns the original outcome and never pays twice | **Built** (Technical design §5.1); the bank's own payments adapter is **Bank** |
 | Unknown outcomes | A payment the bank has not confirmed or declined stays held against the limit and is reconciled; a timeout is never treated as a failure | **Built**; scheduling reconciliation is **Bank** |
-| Valet never executes | Valet decides, holds and instructs; the bank's payment system executes, clears and settles | **Built** (one adapter, `core.py`) |
+| Cancel-or-confirm | A hold is released only when the bank tombstones the instruction (it will never execute it, even late) or settles it; no answer escalates to the operations queue, still held. Pause and revoke cancel everything the bank has not accepted, including approved-but-unsent payments | **Built** (Technical design §5.1); `cancel` in the bank's payments adapter and the queue SLA are **Bank** |
+| Valet never executes | Valet is an authorisation and transaction-control layer: it decides, holds mandate headroom and initiates one idempotent instruction through the bank-controlled payments API, which executes, clears and settles | **Built** (one adapter, `core.py`) |
 | Intent evidence in receipts | Each payment receipt says whether it shows a standing mandate or a customer-confirmed payment | **Built** (two tiers); recorded authentication context **Designed** (Technical design §8.1) |
 | Signed, hash-chained receipts | Every decision, allowed or refused; any change or deletion breaks every later link | **Built** |
-| Agent trust can be withdrawn | Registry marks an agent untrusted; all its grants are refused within 60 seconds | **Built** |
-| Versioned mandates | Every receipt names the exact mandate terms in force | **Designed** (Technical design §3.1) |
+| Agent trust can be withdrawn | Registry marks an agent untrusted; all its grants are refused within 60 seconds. If the registry cannot be reached, payments fail closed at once | **Built** |
+| Emergency stop (denylist) | The bank denylists a client, operator or key; refused on the next request on every node, and checked again before any payment is sent | **Built** (Technical design §9.1) |
+| Versioned mandates | Every intent and receipt names the mandate id and version (always 1 today: built); editing a mandate into new versions is **Designed** (Technical design §3.1) | **Built** in part |
 | Triggering instruction in receipts | Records the instruction behind each action, labelled as agent-supplied | **Designed** |
 | Signing keys in an HSM; receipt retention | | **Bank** |
 | Customer sign-in strength (passkeys, step-up, account-takeover detection) | | **Bank** |
