@@ -11,7 +11,7 @@ across retries, crashes and timeouts:
                            --> unknown_outcome    the bank did not answer; the hold stays until reconciled
 
 Rules:
-  - One intent per agent and Idempotency-Key. The same key with the same payment continues or replays that intent and
+  - One intent per grant and Idempotency-Key (two customers of one agent may use the same key). The same key with the same payment continues or replays that intent and
     can never pay twice; the same key with a different payment is refused.
   - The limit check and the hold happen in one locked step, so two parallel payments cannot both pass a limit only
     one fits under. Held amounts (reserved, executing, unknown_outcome) count against the month.
@@ -35,8 +35,9 @@ from .store import Store, month_key
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS payment_intents (id TEXT PRIMARY KEY, grant_id TEXT, client_id TEXT, idem_key TEXT,
     request_digest TEXT, detail TEXT, amount INTEGER, month TEXT, status TEXT, basis TEXT, approval TEXT, reason TEXT,
-    bank_payment_id TEXT, outcome TEXT, created REAL, updated REAL, expires REAL);
-CREATE UNIQUE INDEX IF NOT EXISTS payment_intents_idem ON payment_intents (client_id, idem_key);
+    bank_payment_id TEXT, outcome TEXT, created REAL, updated REAL, expires REAL, channel TEXT DEFAULT 'api');
+DROP INDEX IF EXISTS payment_intents_idem;
+CREATE UNIQUE INDEX IF NOT EXISTS payment_intents_grant_key ON payment_intents (grant_id, idem_key);
 CREATE INDEX IF NOT EXISTS payment_intents_held ON payment_intents (grant_id, month, status);
 """
 
@@ -53,14 +54,19 @@ class Payments:
         self.store, self.core, self.receipts = store, core, receipts
         self.reconcile_after, self.abandon_after = reconcile_after, abandon_after
         store.db.executescript(SCHEMA)
+        if "channel" not in {c["name"] for c in store.db.execute("PRAGMA table_info(payment_intents)")}:
+            store.db.execute("ALTER TABLE payment_intents ADD COLUMN channel TEXT DEFAULT 'api'")   # a 0.4 database
 
     # ------------------------------------------------------------- reads
     def get(self, intent_id: str) -> dict[str, Any] | None:
         row = self.store.one("SELECT * FROM payment_intents WHERE id=?", intent_id)
         return self._view(row)
 
-    def by_key(self, client_id: str, key: str) -> dict[str, Any] | None:
-        return self._view(self.store.one("SELECT * FROM payment_intents WHERE client_id=? AND idem_key=?", client_id, key))
+    def by_key(self, grant_id: str, key: str) -> dict[str, Any] | None:
+        return self._view(self.store.one("SELECT * FROM payment_intents WHERE grant_id=? AND idem_key=?", grant_id, key))
+
+    def by_approval(self, grant_id: str, approval_id: str) -> dict[str, Any] | None:
+        return self._view(self.store.one("SELECT * FROM payment_intents WHERE grant_id=? AND approval=?", grant_id, approval_id))
 
     @staticmethod
     def _view(row: Any) -> dict[str, Any] | None:
@@ -79,11 +85,13 @@ class Payments:
 
     # ------------------------------------------------------------- writes (call inside store.tx())
     def create(self, grant: dict[str, Any], key: str, request_digest: str, detail: dict[str, Any], cents: int,
-               status: str, basis: str, reason: str | None = None, expires: float | None = None) -> dict[str, Any]:
+               status: str, basis: str, reason: str | None = None, expires: float | None = None,
+               approval: str | None = None, channel: str = "api") -> dict[str, Any]:
         iid, now = random_id("pi", 12), time.time()
-        self.store.x("INSERT INTO payment_intents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", iid, grant["id"],
-                     grant["client_id"], key, request_digest, json.dumps(detail), cents, month_key(), status, basis,
-                     None, reason, None, None, now, now, expires)
+        self.store.x("INSERT INTO payment_intents (id, grant_id, client_id, idem_key, request_digest, detail, amount, "
+                     "month, status, basis, approval, reason, created, updated, expires, channel) "
+                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", iid, grant["id"], grant["client_id"], key, request_digest,
+                     json.dumps(detail), cents, month_key(), status, basis, approval, reason, now, now, expires, channel)
         return self.get(iid)
 
     def link_approval(self, grant_id: str, request_digest: str, approval_id: str) -> str | None:
@@ -200,7 +208,7 @@ class Payments:
         fields: dict[str, Any] = {
             "detail": {"to": d["to"]["name"], "account": d["to"]["account"], "amount": d["amount"]["amount"],
                        "currency": d["amount"]["currency"], "reference": d.get("reference", "")},
-            "payment_intent": intent["id"], "idempotency_key": intent["idem_key"],
+            "payment_intent": intent["id"], "idempotency_key": intent["idem_key"], "channel": intent.get("channel") or "api",
             "intent_evidence": EVIDENCE.get(intent["basis"], "standing_mandate")}
         if intent["basis"] == "approval":
             fields["approval"] = intent["approval"]

@@ -148,3 +148,57 @@ def test_malformed_json_rpc(bad):
         assert r.json()["error"]["code"] in (-32700, -32600)
         assert (await w.rpc("resources/list")).json()["error"]["code"] == -32601
     run(t())
+
+
+def test_gateway_payments_are_payment_intents_and_survive_a_silent_bank():
+    """The gateway uses the same payment intents as the direct API (design section 5.1)."""
+    async def t():
+        from valet.testing.flaky_core import install
+        w = World()
+        store, payments, gid = w.h.bank.store, w.h.bank.payments, w.grant["id"]
+        held = await w.tool("pay_existing_payee", payee_id="ben_water", from_account_id="acc_4821", amount="640.00",
+                            reason="Water bill", idempotency_key="water-0001")
+        intent = payments.by_key(gid, "water-0001")
+        assert intent["status"] == "approval_required" and intent["approval"] == held["payment_ref"]
+        assert intent["channel"] == "mcp_gateway"
+        await w.h.login()
+        await w.h.decide(held["payment_ref"], approve=True)
+        core = install(w.h.bank)
+        core.mode = "lost_reply"                                   # the bank pays but never answers
+        first = await w.tool("get_payment_status", payment_ref=held["payment_ref"])
+        assert first["outcome"] == "APPROVED" and first["status"] == "pending"
+        assert payments.get(intent["id"])["status"] == "unknown_outcome"
+        assert payments.reserved(gid) == 640_00 and store.spent(gid) == 0
+        # held money counts: 640 held + 1,500 is over the 2,000 limit
+        over = await w.tool("pay_existing_payee", payee_id="ben_school", from_account_id="acc_4821", amount="1500.00",
+                            reason="fees", idempotency_key="school-001")
+        assert over["reason_codes"] == ["MONTHLY_LIMIT_EXCEEDED"]
+        core.mode = "ok"
+        a, b = await asyncio.gather(w.tool("get_payment_status", payment_ref=held["payment_ref"]),
+                                    w.tool("get_payment_status", payment_ref=held["payment_ref"]))
+        assert a["status"] == b["status"] == "paid"
+        assert store.one("SELECT balance FROM accounts WHERE id='acc_4821'")["balance"] == 18_430_55 - 640_00
+        assert store.spent(gid) == 640_00 and payments.reserved(gid) == 0
+        paid = [r for r in w.h.bank.receipts.for_grant(gid) if r["action"] == "payment" and r["outcome"] == "allowed"]
+        assert len(paid) == 1 and paid[0]["payment_intent"] == intent["id"] and paid[0]["channel"] == "mcp_gateway"
+        assert paid[0]["approval"] == held["payment_ref"] and paid[0]["intent_evidence"] == "customer_confirmed"
+        assert paid[0]["bank_payment_id"] and w.h.bank.receipts.verify_chain()["ok"]
+    run(t())
+
+
+def test_a_bank_decline_through_the_gateway_releases_the_hold():
+    async def t():
+        w = World()
+        store, gid = w.h.bank.store, w.grant["id"]
+        held = await w.tool("pay_existing_payee", payee_id="ben_water", from_account_id="acc_4821", amount="640.00",
+                            reason="Water bill", idempotency_key="water-0001")
+        await w.h.login()
+        await w.h.decide(held["payment_ref"], approve=True)
+        store.x("UPDATE accounts SET balance=10000 WHERE id='acc_4821'")      # R100 in the account
+        out = await w.tool("get_payment_status", payment_ref=held["payment_ref"])
+        assert out["outcome"] == "DECLINED" and out["reason_codes"] == ["INSUFFICIENT_FUNDS"]
+        again = await w.tool("get_payment_status", payment_ref=held["payment_ref"])
+        assert again["reason_codes"] == ["INSUFFICIENT_FUNDS"]
+        assert w.h.bank.payments.reserved(gid) == 0 and store.spent(gid) == 0
+        assert store.one("SELECT balance FROM accounts WHERE id='acc_4821'")["balance"] == 100_00
+    run(t())

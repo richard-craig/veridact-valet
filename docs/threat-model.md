@@ -1,6 +1,6 @@
 # Veridact Valet: Threat Model
 
-Version 0.2 · 15 November 2026 · For bank security architects, CISOs and risk teams
+Version 0.3 · 16 November 2026 · For bank security architects, CISOs and risk teams
 
 **What this document answers:** for each way an agent reaches a customer's account, what can go wrong, which controls Valet provides, which controls the bank must provide, and what risk remains. Every control is labelled with its real status, so nothing here claims more than the code does.
 
@@ -119,7 +119,7 @@ flowchart LR
 | DPoP-bound tokens | Token carries `cnf.jkt`; every call carries a fresh signed proof (method, URL, time, unique id, token hash) | **Built** |
 | Replay protection | Proof `jti` cache; proofs older than 60 seconds rejected | **Built** |
 | Short access tokens | 5 minutes | **Built** |
-| Refresh rotation with reuse detection | Reuse of an old refresh token pauses the grant and tells the customer | **Built** (Valet authorisation server). FAPI 2.0 bars rotation for key-bound tokens: open decision (Technical design §14.1) |
+| Refresh rotation with reuse detection | Reuse of an old refresh token pauses the grant and tells the customer. An agent that lost the response may retry for 60 seconds with the same key | **Built** (Valet authorisation server). FAPI 2.0 bars rotation for key-bound tokens; Valet keeps it deliberately, because the bank does not control the agent's private key (Technical design §4.1) |
 | Pairwise customer identifier | `sub` differs per agent, so agents can't correlate customers | **Built** |
 | Agent identity from a registry | Consent screen shows the operator name from the registry, never from the agent's request | **Built** (static signed list); **Designed** (Veridact) |
 | Explicit delegation claim | RFC 8693 `act` claim naming the agent | **Proposed** |
@@ -326,10 +326,10 @@ How a session stays alive: the assistant receives a refresh token and gets new 5
 | G10 | POPIA cross-border transfer; SARB Directive 2 of 2024 | All | Counsel's view | Valet + bank |
 | G11 | Browser agents riding web sessions | Outside Valet | Veridact detection on web channels | Veridact + bank |
 | G12 | Claude Code arrives as a public CIMD client | J2 | Refuse, or hold to view only | Bank |
-| G13 | The PoC's "bank" is a fictional core in the same database, and reconciliation runs on request | All | A real payments adapter, idempotent on the intent id, with scheduled reconciliation and a rule for late arrivals | Bank + Valet |
-| G14 | FAPI 2.0 conformance not run; refresh rotation and the demo's RS256 tokens differ from the profile | J1 | Technical design §14.1 | Valet + bank |
-| G15 | Mandates are not versioned, and approvals do not record the authentication behind them | All | Technical design §3.1, §8.1 | Valet |
-| G16 | The MCP gateway does not use payment intents yet (it is idempotent on the approval id) | J2 | Move the gateway onto payment intents | Valet |
+| G13 | The PoC's "bank" is a fictional core in the same database, and reconciliation runs on request | All | A real payments adapter, idempotent on the intent id, with scheduled reconciliation and a rule for late arrivals: the main deliverable of the first bank POC | Bank + Valet |
+| G14 | FAPI 2.0 conformance not run. Refresh rotation differs from the profile by choice; the demo's RS256 tokens differ by configuration | J1 | Technical design §4.1, §14.1 | Valet + bank |
+| G15 | Mandates are not versioned (deferred until customers can edit a mandate; today a change means a new consent and a new grant), and approvals do not record the authentication behind them | All | Technical design §3.1, §8.1, §16 | Valet |
+| G16 | Closed in 0.3: the MCP gateway now uses the same payment intents as the direct API | J2 | Technical design §5.1 | Done |
 
 ## 8. Assumptions
 

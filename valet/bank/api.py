@@ -191,7 +191,7 @@ def router(bank: Bank) -> APIRouter:
         limit = L.monthly_limit(c.details) or 0
         # One locked step: find or create the intent, check the limit against what is spent and held, and hold the amount.
         with store.tx():
-            intent, new = payments.by_key(c.grant["client_id"], key), False
+            intent, new = payments.by_key(c.grant["id"], key), False
             if intent is None:
                 new = True
                 existing = store.one("SELECT 1 FROM beneficiaries WHERE customer=? AND account=?", c.grant["customer"], to_acct)
@@ -203,7 +203,7 @@ def router(bank: Bank) -> APIRouter:
                               f"{rand(cents)} would take this month to {rand(used + cents)}, over the {rand(limit)} limit")
                     intent = payments.create(c.grant, key, d, detail, cents, "approval_required", "grant", reason=reason,
                                              expires=time.time() + bank.cfg.approval_ttl)
-        if intent["grant_id"] != c.grant["id"] or intent["request_digest"] != d:
+        if intent["request_digest"] != d:
             receipt(c, "payment", "refused", "refused", reason="idempotency key reused for a different payment", detail=summary)
             raise OAuthError("idempotency_key_reused", "this Idempotency-Key was used for a different payment; "
                                                        "use a new key for a new payment", 422)
@@ -229,7 +229,7 @@ def router(bank: Bank) -> APIRouter:
         the same Idempotency-Key, the same payment, once. Valet's own approvals and, in native mode, the bank's
         authorisation server's (e.g. CIBA with RAR) are both checked against that held intent."""
         d, approved_ref = digest(detail), None
-        intent = payments.by_key(c.grant["client_id"], key)
+        intent = payments.by_key(c.grant["id"], key)
         if intent and intent["request_digest"] == d and intent["status"] != "approval_required" and intent["basis"] == "approval":
             ref = f"idp:{c.claims.get('jti')}" if c.external else c.claims.get("approval")
             if intent["approval"] == ref:                         # a retry of the approved payment: never pays twice
@@ -264,7 +264,7 @@ def router(bank: Bank) -> APIRouter:
             if d != ap["digest"]:
                 refuse("this payment differs from what the customer approved")
             approved_ref = ap["id"]
-        if not intent or intent["grant_id"] != c.grant["id"] or intent["request_digest"] != d:
+        if not intent or intent["request_digest"] != d:
             refuse("no held payment matches this Idempotency-Key: send the approved payment with the key of the request "
                    "the bank held")
         if not c.external and intent["approval"] != approved_ref:

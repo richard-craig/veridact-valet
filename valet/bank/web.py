@@ -97,6 +97,8 @@ def describe(rec: dict[str, Any]) -> dict[str, str]:
         words = {"insufficient_funds": "Not enough money in the account"}
         return {"title": f"Not paid: {to}{amt}", "sub": words.get(rec.get("reason", ""), "Declined by the bank"),
                 "kind": "blocked"}
+    if a == "refresh" and o == "retried":
+        return {"title": "Assistant reconnected after a lost reply", "sub": "Same key; nothing changed", "kind": "info"}
     if a == "key_binding":
         return {"title": "Linked to the assistant's key", "sub": "On its first call", "kind": "info"}
     if a == "payment" and o == "held":

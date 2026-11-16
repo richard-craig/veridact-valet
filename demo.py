@@ -160,6 +160,7 @@ async def main() -> int:
     step(10, "A copy of Kaya's refresh token is used")
     stolen_rt = kaya.session.refresh_token
     await kaya.refresh()
+    h.bank.store.x("UPDATE refresh SET used=used-120 WHERE used>0")     # two minutes later: past the 60-second retry window
     kaya.session.refresh_token = stolen_rt
     e = await expect_error(kaya.refresh(), "invalid_grant")
     say("BANK", f"detects reuse: {e.body['error_description'] if e else 'NOT DETECTED'}")

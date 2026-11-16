@@ -1,6 +1,6 @@
 # Veridact Valet: Technical Design
 
-Version 0.4 · 15 November 2026
+Version 0.5 · 16 November 2026
 
 ## 1. Scope and key decisions
 
@@ -121,9 +121,9 @@ flowchart LR
 | Grant | `grant_id`, customer, agent, level, `authorization_details`, status, created, expires, DPoP key thumbprint (`jkt`), consent evidence hash | Status is `active`, `paused`, `revoked` or `expired`; only `active` lets calls through. `jkt` is set when the customer consents, from the key the agent named during authorisation |
 | PAR request | `request_uri`, client, parameters, `dpop_jkt`, expiry (60 s) | Single use |
 | Authorisation code | code, grant, PKCE challenge, expiry (60 s), used | Single use; redeemed only with a proof from the key the grant was bound to at consent |
-| Refresh token | opaque, grant, `jkt`, rotated on use | Refused when the grant is not active |
+| Refresh token | opaque, grant, `jkt`, rotated on use, time of use | Refused when the grant is not active. A used token is accepted again for 60 seconds from the same key (§4.1); after that, reuse pauses the grant |
 | Approval (CIBA) | `auth_req_id`, grant, exact action, action digest, binding message, status, expiry (5 min), consumed | Status `pending`, `approved`, `denied`, `expired`; consumed once, by the payment intent it was requested for |
-| Payment intent | `payment_intent_id` (server-generated), grant, agent, Idempotency-Key, request digest, exact payment, amount, month, state, basis, approval, the bank's payment id, stored outcome | One per agent and key. States and rules in §5.1 |
+| Payment intent | `payment_intent_id` (server-generated), grant, agent, Idempotency-Key, request digest, exact payment, amount, month, state, basis, approval, channel (direct API or MCP gateway), the bank's payment id, stored outcome | One per grant and key. States and rules in §5.1 |
 | Spend ledger | grant, calendar month (South African time), spent | Integer cents. Changed only when the bank confirms a payment; money held for unconfirmed payments is the sum of held intents |
 | Receipt | sequence, previous hash, record, hash, signature | Append-only chain (§8) |
 | DPoP replay cache | proof `jti`, expiry | Rejects reused proofs |
@@ -211,6 +211,19 @@ grant_type=authorization_code&code=SplxlO…&code_verifier=dBjftJeZ4…
  "authorization_details": [{"type": "valet_payments", "actions": ["pay_existing_beneficiary"], …}]}
 ```
 
+### 4.1 Refresh tokens: rotation, with a short retry window
+
+**Valet rotates refresh tokens on every use, lets an agent that lost the response retry for 60 seconds with the same key, and pauses the grant on any other reuse.**
+
+- **Rotation.** Each refresh returns a new refresh token and retires the one presented.
+- **Retry window.** If the response is lost, the agent may present the token it just used again within 60 seconds, with a DPoP proof from the same key and the same client authentication. It gets a fresh pair, the successor it never received is withdrawn, and a receipt records the retry. One grant never has two live refresh tokens.
+- **Reuse.** A used token presented after the window, or at any time with a different key or client, means a copy exists: the grant is paused, the customer sees it in the bank app, and a receipt is written.
+- The window is a bank setting (`refresh_retry_window`); 0 turns the retry off.
+
+**Why Valet rotates, although FAPI 2.0 says not to.** The FAPI 2.0 Security Profile (5.3.2.1, item 9) bars refresh token rotation except in extraordinary circumstances, on the reasoning that a sender-constrained refresh token is useless without the client's private key. That reasoning rests on the key staying private, and **the bank does not control the agent's private key**. It sits in the agent operator's infrastructure, under the operator's custody and controls. If the key and a refresh token are copied together, a static refresh token gives a long-lived foothold that nothing on the bank's side would notice. Rotation is a control the bank runs itself: it limits how long a copied token is useful, and the first time the real agent and the copy both refresh, the bank sees the reuse and stops the grant. We judge that more secure for delegated access to a customer's money than relying on a third party's key custody alone.
+
+FAPI's own concern is that a lost response strands an honest client. The retry window answers it, in the way the profile's note allows where rotation is used: the previous token stays usable for a short, limited time. Rotation as the normal behaviour remains a **deliberate, documented difference** from the profile (§14.1), and a conformance run will report it. A bank that needs strict conformance on this point can run native mode with rotation switched off on its own identity platform.
+
 ## 5. Tokens and enforcement at the bank API
 
 **The access token says who and what; the live grant says whether, right now; the ledger says how much is left; the bank checks all three on every call, in a fixed order.**
@@ -273,7 +286,7 @@ stateDiagram-v2
 
 **Rules**
 
-- **One intent per agent and `Idempotency-Key`.** The same key with the same payment continues or replays that intent and returns the same answer, including the same receipt. The same key with a different payment is refused (`idempotency_key_reused`). A new payment needs a new key.
+- **One intent per grant and `Idempotency-Key`.** Keys are scoped to the grant, so two customers of the same agent can use the same key. The same key with the same payment continues or replays that intent and returns the same answer, including the same receipt. The same key with a different payment is refused (`idempotency_key_reused`). A new payment needs a new key.
 - **The intent id is the bank's idempotency key.** Valet generates `payment_intent_id` and passes it to the bank's payments API on every attempt, so a re-sent instruction returns the bank's original result instead of paying again. The bank's own payment id comes back and is kept as the reconciliation reference.
 - **A timeout is not a failure.** If the bank does not answer, the intent becomes `unknown_outcome`, the agent is told `pending` (HTTP 202), and the hold stays. Nothing is released and no second attempt is authorised under a new key until the bank says paid or declined.
 - **Recovery is a retry or a reconciliation, never a guess.** A retry with the same key re-sends the same intent. A scheduled reconciliation asks the bank about every held intent: paid or declined is settled; an intent the bank has never seen stays held for a grace period (15 minutes in the PoC) and is then released.
@@ -290,7 +303,7 @@ stateDiagram-v2
 
 Debtor ownership, account status and payee eligibility are confirmed by the bank's systems when it executes, not taken from the token or the mandate.
 
-**Status.** Built on the direct API and covered by tests (`tests/test_payments.py`): retries, reused keys, parallel payments, a bank that pays but never answers, a bank that never receives the instruction, a crash between the hold and the answer, reconciliation, and replayed approvals. The MCP gateway and the Consent Service's open-banking API send the same idempotent instruction through the same adapter, keyed on the approval id and the decision id. In the PoC the "bank" is a fictional core in the same database and reconciliation runs on request (`POST /ops/payments/reconcile`); a bank deployment needs its own adapter and a schedule.
+**Status.** Built on the direct API and on the MCP gateway, which create and settle the same payment intents through the same component (`payments.py`), and covered by tests (`tests/test_payments.py`, `tests/test_mcp.py`): retries, reused keys, parallel payments, a bank that pays but never answers, a bank that never receives the instruction, a crash between the hold and the answer, reconciliation, and replayed approvals. On the gateway every payment starts as `approval_required`, and `get_payment_status` is what moves an approved intent on. The Consent Service's open-banking API keeps its own reserve-and-settle record and sends the same idempotent instruction through the same adapter, keyed on its decision id. In the PoC the "bank" is a fictional core in the same database and reconciliation runs on request (`POST /ops/payments/reconcile`). **The first real adapter, against a bank's sandbox payments API with scheduled reconciliation, is the main deliverable of the first bank POC.**
 
 ## 6. Approval flow for exceptions
 
@@ -412,7 +425,7 @@ Agent ecosystems identify an agent by an HTTPS URL serving its metadata and sign
 | `POST /par` | Agent | `private_key_jwt` | Push the connect request (PKCE S256, redirect URI, `authorization_details`, `dpop_jkt` or a DPoP proof); returns a `request_uri` valid for 60 seconds |
 | `GET /authorize` | Browser | Customer session | Consent screen for a pushed request; asks the customer to sign in first if needed |
 | `POST /authorize/decision` | Browser | Session and CSRF token | The customer's choice: creates the grant, bound to the agent's key, and a single-use 60-second code, or returns `access_denied`. The redirect carries `iss` |
-| `POST /token` | Agent | `private_key_jwt` and DPoP | `authorization_code` with PKCE; `refresh_token` (rotating, reuse pauses the grant); `urn:openid:params:grant-type:ciba` for an approved action |
+| `POST /token` | Agent | `private_key_jwt` and DPoP | `authorization_code` with PKCE; `refresh_token` (rotating; a 60-second retry with the same key, then reuse pauses the grant); `urn:openid:params:grant-type:ciba` for an approved action |
 | `POST /bc-authorize` | Agent | `private_key_jwt` | Ask the customer to approve one action the API offered. `login_hint` is the grant id. Returns `auth_req_id`, `expires_in` 300, `interval` 2 |
 | `GET /api/accounts` | Agent | DPoP-bound token | Balances of the accounts in the grant |
 | `GET /api/accounts/{id}/transactions` | Agent | DPoP-bound token | Transactions within the grant's history window (90 days) |
@@ -472,7 +485,7 @@ At `/token` and `/bc-authorize`: `authorization_pending` (keep polling at `inter
 | Agent tampers with what the customer sees | PAR: parameters are pushed server-to-server by the authenticated agent, so nothing in the browser can change them; the consent screen renders from the stored request and the registry, not from URL parameters |
 | Prompt injection makes the agent pay a fraudster | New payees always need an approval; the approval prompt is built by the bank from the payment detail; limits cap damage within the grant |
 | Customer coached to approve | The prompt shows payee, amount, “new recipient”, and the bank’s scam warning; the bank’s own fraud scoring still runs on approved payments |
-| Stolen access or refresh token | DPoP binding (`cnf.jkt`), 5-minute access tokens, refresh rotation with reuse detection that pauses the grant |
+| Stolen access or refresh token | DPoP binding (`cnf.jkt`), 5-minute access tokens, refresh rotation with reuse detection that pauses the grant (§4.1). Rotation is kept because the bank does not control the agent's private key |
 | Stolen authorisation code, or a grant claimed with another key | The agent names its key at PAR; the grant is bound to it at consent, in both modes; the code is redeemed only with a proof from that key; a native-mode grant with no key is refused |
 | Double payment after a retry, a crash or a timeout | One payment intent per `Idempotency-Key`; the intent id is the bank's idempotency key; a timeout is `unknown_outcome`, held until the bank answers (§5.1) |
 | Parallel payments squeezing past a limit | The limit check and the hold are one locked step, and held money counts |
@@ -524,7 +537,7 @@ Keycloak's row was confirmed against a running Keycloak 26.4.0: its metadata adv
 
 - **Auth0.** Federated: a Regular Web Application. Use `email` or a customer-number claim added by an Action as the customer claim; Valet asks for `max_age=0` at step-up and checks `auth_time`. Native: an Action registers the consent and adds the `valet_grant` claim; Universal Login templates show the RAR details; approvals can use CIBA with Guardian push.
 - **Keycloak.** Both modes run end to end on Keycloak 26.4.0. Federated: the realm file in the repo and `docker-compose.keycloak.yml`. Native: the Valet extension (`extensions/keycloak-valet`, Java). After Keycloak signs the customer in, it hands them to Valet's consent screen with a signed ticket that carries the agent's `dpop_jkt` (Keycloak 26.4 accepts the parameter on the pushed request and binds its authorisation code to it). Valet binds the grant to that key at consent. Keycloak then checks Valet's signed answer, and puts the grant id in the agent's DPoP-bound tokens as `valet_grant`. RAR is not needed, because the customer's choice is made on Valet's screen. Approvals stay with Valet's CIBA, which only issues to the bound key.
-- **PingFederate.** Native: Valet's RAR types and processor, an access-token mapping for the grant claim, and CIBA with the bank's push authenticator. Confirm PAR, DPoP and `dpop_jkt` (authorisation code binding) on the version in use, and that the policy step or adapter can read the thumbprint to pass to Valet; otherwise enforce DPoP at the gateway and use federated mode for binding at consent.
+- **PingFederate.** Native, with the consent hand-off, is the chosen route for the first bank POC, so PingFederate issues the agent's tokens and Valet keeps consent, mandates and enforcement. It needs an access-token mapping for the grant claim, a policy step that hands the customer to Valet's consent screen and reads the signed result (the equivalent of the Keycloak extension), and CIBA with the bank's push authenticator or Valet's own. To confirm on the bank's version: PAR, DPoP, `dpop_jkt` (authorisation code binding), and whether a policy step can read the thumbprint to pass to Valet. If it cannot out of the box, Valet supplies a PingFederate adapter that does. Until that is proven, the fallbacks are binding at first use (weaker, and recorded) or federated mode.
 - **Microsoft Entra ID and Entra External ID.** Federated: Entra stays the customer identity provider, and Valet's authorisation server adds the agent features Entra does not provide.
 - **Okta.** Federated, because RAR is not documented. DPoP and CIBA exist, so revisit native mode if RAR arrives.
 
@@ -560,7 +573,7 @@ The extension uses Keycloak's internal authenticator and protocol-mapper SPIs, a
 ```bash
 pip install -r requirements.txt
 python demo.py          # scripted end-to-end run: 13 steps, 24 checks
-python -m pytest -q     # 93 behaviour tests, including payment safety, both identity-provider modes and the consent hand-off
+python -m pytest -q     # 99 behaviour tests, including payment safety, both identity-provider modes and the consent hand-off
 python run.py           # clickable: Kaya http://localhost:8001, Marula Bank http://localhost:8000 (thandi / demo)
 
 docker compose up --build        # the same clickable demo in containers
@@ -585,10 +598,12 @@ python deploy/keycloak/setup_native.py
 | 7 | School fees over the monthly limit; Thandi declines | Held, then nothing paid |
 | 8 | Kaya tries to add a beneficiary | Always refused |
 | 9 | Thandi pauses, then resumes | Effective on the next call; a paused grant cannot refresh |
-| 10 | A copied refresh token is used | Reuse detected; the grant pauses |
+| 10 | A copied refresh token is used, after the 60-second retry window | Reuse detected; the grant pauses |
 | 11 | Trust in Kaya's operator is withdrawn | Every grant for Kaya stops at once |
 | 12 | Thandi disconnects Kaya | Immediate and final |
 | 13 | A receipt is altered | The signed hash chain shows exactly where |
+
+**Verified on 16 November 2026 (version 0.5):** 24 of 24 checks and 99 of 99 tests passed on Python 3.11 and 3.13, and the native-mode preflight passed 38 of 38 against Keycloak 26.4.0, including a payment through the MCP gateway recorded as a payment intent. As on 15 November, the services were started directly rather than in containers.
 
 **Verified on 15 November 2026 (version 0.4):** 24 of 24 checks and 93 of 93 tests passed on Python 3.11 (a clean virtual environment built only from `requirements.txt`) and 3.13. Native mode was run end to end against a real **Keycloak 26.4.0** with the rebuilt extension (compiled with `javac` against Keycloak's own libraries): `scripts/preflight.py` passed 38 of 38 checks across Kaya, the Consent Service app and the MCP gateway, with binding at first use switched off, plus the key-binding results in §12. That run started the services directly rather than in containers; the Docker images were not rebuilt.
 
@@ -620,7 +635,7 @@ Valet has one core profile and two ways in. Both run the check order in §5 on t
 
 **One vocabulary.** The gateway's mandate is this document's grant: one record, the same RAR types and the same reason codes. Its three outcomes map onto §10: APPROVED is a 200, APPROVAL\_REQUIRED is approval\_required, and DECLINED is any other 403.
 
-**One enforcement engine.** The gateway calls the same enforcement component as the direct API, so each rule is written and tested once. In the PoC the two still hold their payments differently: the direct API uses payment intents (§5.1); the gateway keys its idempotency and its instruction to the bank on the approval id. Both send the bank one idempotent instruction through the same adapter; moving the gateway onto payment intents is the remaining step.
+**One enforcement engine.** The gateway calls the same enforcement component as the direct API, so each rule is written and tested once. Payments on both are the same payment intents, held, instructed and settled by the same code (§5.1); the gateway differs only in that every payment needs the customer's approval first.
 
 **Agent identity on assistant platforms.** For Claude and ChatGPT, the OAuth client is the platform, not the individual agent, so Veridact cannot raise their tier yet.
 
@@ -634,7 +649,7 @@ Valet has one core profile and two ways in. Both run the check order in §5 on t
 | Client authentication by `private_key_jwt` or mTLS | 5.3.2.1 (6) | Met | Met in the Keycloak demo realm |
 | Client assertion `aud` is the issuer, as a single string | 5.3.2.1 (8) | **To check:** the issuer is required, but an array containing it is not yet refused | The bank's IdP |
 | Sender-constrained access tokens only (DPoP or mTLS) | 5.3.2.1 (4, 5) | Met: DPoP on every token | Met where the client requires DPoP; Valet refuses tokens without `cnf.jkt` |
-| No refresh token rotation, except with a time-limited retry of the old token | 5.3.2.1 (9) | **Differs:** Valet rotates on every use, and reuse pauses the grant. Open decision below | The bank's IdP |
+| No refresh token rotation, except with a time-limited retry of the old token | 5.3.2.1 (9) | **Differs, deliberately:** Valet rotates on every use, with a 60-second retry for the previous token; reuse outside it pauses the grant. Reasons in §4.1 | The bank's IdP; rotation can be switched off there for strict conformance |
 | Authorisation code lifetime at most 60 seconds | 5.3.2.1 (11) | Met: 60 seconds, single use | The bank's IdP |
 | With DPoP, authorisation code binding to the key | 5.3.2.1 (12) | Met: `dpop_jkt` or a DPoP proof at PAR, required | Met on Keycloak 26.4.0; confirm on other platforms |
 | PAR with client authentication; requests without PAR refused | 5.3.2.2 (2 to 4) | Met | Met in the Keycloak demo realm |
@@ -647,7 +662,7 @@ Valet has one core profile and two ways in. Both run the check order in §5 on t
 
 Signed request objects (JAR) are not required by this profile; PAR replaces them.
 
-**Open decision: refresh tokens.** FAPI 2.0 bars rotation because a lost response strands an honest client, and sender-constrained tokens already make a copied refresh token useless without the agent's key. Valet's rotation with reuse detection predates that reading. The options are to stop rotating on the direct API (keeping the key binding and the client authentication as the control), or to keep rotation and allow a short retry window for the previous token as the profile's note permits. Reuse-pauses-the-grant cannot stay as it is under either. Rotation remains the right control on the bearer tier, where tokens are not key-bound and FAPI does not apply.
+**Decided: refresh tokens rotate (16 November 2026).** Valet keeps rotation with reuse detection on the direct API and adds a 60-second retry window for the previous token, because the bank does not control the agent's private key and should not have to rely on it alone. The full reasoning is in §4.1. This is the one requirement in the table where Valet differs from the profile by choice.
 
 **Outside the boundary.** The MCP gateway's bearer tier uses bearer tokens and, with CIMD, public clients. It is not part of any FAPI claim, which is why its ceiling is view-only or approve-every-payment (§14).
 
@@ -669,4 +684,20 @@ Version 0.4 responds to an architecture review of version 0.3 (15 November 2026)
 
 **One rule changed in the code to match §6:** an approved payment now counts towards the month's total on the direct API, as the design already said and the MCP gateway already did. In 0.3 the direct API did not count it.
 
-**Still open from the review:** versioned mandates (§3.1); recording authentication context on approvals; per-grant receipt chains and receipts that keep personal data outside the chain (§8); an agent registry with key rotation, compromise response and emergency revocation beyond the 60-second trust cache (§9); limit units and FX for non-rand payments; RTO, RPO and maximum revocation propagation time, which are the bank's to set (§5); the refresh-token decision (§14.1); and adversarial and conformance testing.
+**Still open after 0.4:** see §16 for the decisions taken since.
+
+## 16. Changes in version 0.5 and decisions taken
+
+Decisions of 16 November 2026 on the items version 0.4 left open.
+
+| Item | Decision | Status |
+| --- | --- | --- |
+| Refresh token rotation under FAPI 2.0 | Keep rotation and reuse detection; add a 60-second retry window for the previous token, same key only. Justification: the bank does not control the agent's private key (§4.1) | Built |
+| MCP gateway and payment intents | The gateway uses the same payment intents as the direct API | Built |
+| Idempotency key scope | Per grant, not per agent, so customers of one agent cannot collide | Built |
+| PingFederate | Native mode with the consent hand-off for the first bank POC; Valet writes a PingFederate adapter if the platform cannot pass the agent's key thumbprint itself (§12) | To do in the POC |
+| Real payments adapter | Built in the first bank POC, against the bank's sandbox payments API, with scheduled reconciliation (§5.1) | To do in the POC |
+| Versioned mandates | **Deferred.** Customers cannot edit a mandate today; they can only pause, resume or revoke it, so there is one version by construction. Versions (§3.1) are built together with mandate editing, and must be in place before a customer can change a limit, payee list or expiry in place. Until then a change means a new consent and a new grant | Deferred, noted |
+| Per-grant receipt chains | **Deferred** (§8). One part to schedule earlier: personal data must move outside the chain before any real customer data is processed, for POPIA | Deferred |
+
+**Still open:** recording authentication context on approvals (§8.1); an agent registry with key rotation, compromise response and emergency revocation beyond the 60-second trust cache (§9); limit units and FX for non-rand payments; RTO, RPO and maximum revocation propagation time, which are the bank's to set (§5); and the conformance run and adversarial testing (§14.1).

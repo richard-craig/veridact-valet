@@ -205,18 +205,32 @@ def router(bank: Bank) -> APIRouter:
         if not row:
             raise OAuthError("invalid_grant", "unknown refresh token")
         grant = store.grant(row["grant_id"])
+        mine = row["jkt"] == jkt and grant["client_id"] == rec.client_id
         if row["used"]:
-            # Reuse means a copy exists somewhere else: stop the grant and tell the customer.
-            store.set_status(grant["id"], "paused")
+            # Refresh tokens rotate (design section 4.1). An agent that lost the response may retry with the token it
+            # just used, for a short window, from the same key. Anything else is a copy: stop the grant and tell the
+            # customer.
+            if not (mine and time.time() - row["used"] <= cfg.refresh_retry_window):
+                if grant["status"] == "active":
+                    store.set_status(grant["id"], "paused")
+                bank.receipts.append(grant_id=grant["id"], agent=grant["client_id"], customer=grant["customer"],
+                                     action="refresh", outcome="refused", basis="refused",
+                                     reason="refresh token reused; grant paused for safety")
+                raise OAuthError("invalid_grant", "refresh token reuse detected; the grant has been paused")
+            if grant["status"] != "active":
+                raise OAuthError("invalid_grant", f"grant is {grant['status']}")
+            # The successor the agent never received is withdrawn, so one grant never has two live refresh tokens.
+            store.x("DELETE FROM refresh WHERE grant_id=? AND used=0", grant["id"])
             bank.receipts.append(grant_id=grant["id"], agent=grant["client_id"], customer=grant["customer"],
-                                 action="refresh", outcome="refused", basis="refused",
-                                 reason="refresh token reused; grant paused for safety")
-            raise OAuthError("invalid_grant", "refresh token reuse detected; the grant has been paused")
-        if row["jkt"] != jkt or grant["client_id"] != rec.client_id:
+                                 action="refresh", outcome="retried", basis="grant",
+                                 reason="the agent retried a refresh it got no answer to")
+            return token_response(grant, jkt)
+        if not mine:
             raise OAuthError("invalid_grant", "refresh token is bound to a different key or agent")
         if grant["status"] != "active":
             raise OAuthError("invalid_grant", f"grant is {grant['status']}")
-        store.x("UPDATE refresh SET used=1 WHERE hash=?", row["hash"])
+        if store.x("UPDATE refresh SET used=? WHERE hash=? AND used=0", int(time.time()), row["hash"]) != 1:
+            raise OAuthError("invalid_grant", "refresh token was used at the same moment; retry")
         return token_response(grant, jkt)
 
     def ciba_grant(request: Request, form: dict[str, Any], rec) -> JSONResponse:

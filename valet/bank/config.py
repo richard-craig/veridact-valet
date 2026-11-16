@@ -25,6 +25,9 @@ class BankConfig:
     approval_ttl: int = 300
     ciba_interval: int = 2
     max_pending_approvals: int = 3
+    # Refresh tokens rotate. An agent that lost the response may retry with the token it just used for this long,
+    # from the same key; after that, reuse pauses the grant. 0 turns the retry off.
+    refresh_retry_window: int = 60
     # Payments the bank has not confirmed or declined (a timeout, a crash): ask the bank again after this long, and
     # release the hold only once the bank has had this long to say it never received the instruction.
     reconcile_after: int = 30

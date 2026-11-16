@@ -394,3 +394,17 @@ def test_the_single_use_gate_lets_one_of_two_racing_workers_through():
         assert first["status"] == second["status"] == "confirmed" and balance(h) == OPENING - 1250_00
         assert store.spent(grant["id"]) == 1250_00                     # settled once, however many workers ask
     run(t())
+
+
+def test_two_grants_of_the_same_agent_can_use_the_same_idempotency_key():
+    """Keys are scoped to the grant: one agent serves many customers, and each may send 'water-oct-2026'."""
+    async def t():
+        h = Harness()
+        first = await h.connect()
+        a = await h.kaya.pay(*WATER, "640.00", idempotency_key="water-oct-2026")
+        second = await h.connect()
+        assert second != first
+        b = await h.kaya.pay(*WATER, "64.00", idempotency_key="water-oct-2026")
+        assert a["outcome"] == b["outcome"] == "paid" and a["payment_intent_id"] != b["payment_intent_id"]
+        assert balance(h) == OPENING - 704_00
+    run(t())
