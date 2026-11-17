@@ -904,7 +904,7 @@ components:
           enum: [permit, deny, step_up_required]
         reason:
           type: string
-          enum: [ok, consent_not_found, consent_not_authorised, consent_expired, consent_revoked, consent_suspended, client_mismatch, actor_mismatch, action_not_granted, resource_not_granted, limit_exceeded, outside_allowed_hours, history_window_exceeded]
+          enum: [ok, consent_not_found, consent_not_authorised, consent_expired, consent_revoked, consent_suspended, agent_denied, client_mismatch, actor_mismatch, action_not_granted, resource_not_granted, limit_exceeded, outside_allowed_hours, history_window_exceeded]
         decision_id:
           type: string
           description: Present when an amount was reserved; settle via PATCH /consent-decisions/{decision_id}.

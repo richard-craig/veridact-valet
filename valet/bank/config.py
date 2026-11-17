@@ -33,6 +33,9 @@ class BankConfig:
     # Nothing is released on a timer: only the bank's tombstone releases a hold (design section 5.1).
     reconcile_after: int = 30
     escalate_after: int = 900
+    # The bank's change-management reference for the policy below (e.g. a change ticket). Every receipt carries it
+    # with the hash of the policy in force (policy.py). Unset: the version is "unlabelled-<hash>" and /readyz says so.
+    policy_version: str = field(default_factory=lambda: os.environ.get("VALET_POLICY_VERSION", ""))
     # Policy ceilings the bank allows agents (cents)
     max_monthly_limit: int = 5_000_00
     max_grant_days: int = 90

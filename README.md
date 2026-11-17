@@ -14,6 +14,7 @@ This repository holds the design and a working proof of concept. The design is i
 - [Threat model](docs/threat-model.md): the controls on each journey (direct agents and AI assistants), their status, and the known gaps.
 - [Technical design](docs/technical-design.md): the profile, data model, flows, check order, receipts, security and identity-provider support.
 - [MCP gateway design](docs/mcp-gateway-design.md) (draft, not yet built): how Claude, ChatGPT, Copilot and Gemini connect through a bank-run MCP gateway.
+- [Control framework mapping](docs/control-framework-mapping.md): Valet against a bank control framework for AI agents (autonomy tiers, assurance states, the minimum evidence set, stopping an agent, board questions) and against South African, EU and UK regulation.
 
 The proof of concept contains:
 
@@ -22,7 +23,7 @@ The proof of concept contains:
 | **Marula Bank** (`valet/bank`) | A fictional bank: a minimal OAuth 2.0 authorisation server (FAPI 2.0-aligned, conformance pending), a banking API with Valet's checks, Valet's grant service and payment intents, a fictional core banking system that executes payments, and the customer's "AI agents" screens. |
 | **Kaya** (`valet/agent`) | A fictional money-assistant agent and the small client SDK it uses. Kaya never sees a password, PIN or OTP. |
 | `demo.py` | A scripted end-to-end run: 13 steps, 24 checks, exits non-zero if any protection fails. |
-| `tests/` | 115 behaviour tests, including payment safety (retries, crashes, timeouts, cancel-or-confirm, pause mid-payment) and the bank's own identity provider in both deployment modes. |
+| `tests/` | 124 behaviour tests, including payment safety (retries, crashes, timeouts, cancel-or-confirm, pause mid-payment), the emergency stop, signed evidence packs, and the bank's own identity provider in both deployment modes. |
 | `extensions/keycloak-valet` | A Keycloak extension (Java) for native mode: hands the customer to Valet's consent screen mid-login and puts the Valet grant id in Keycloak's tokens. |
 
 > Marula Bank, Kaya, Kaya Labs and Thandi are fictional, as are all account numbers. This is a demonstration,
@@ -322,12 +323,14 @@ implementation; nothing else in the bank needs to change.
 | `BANK_SESSION_SECRET` | bank | demo value | Signs the customer's session cookie. Change it outside a laptop. |
 | `CUSTOMER_IDP`, `OIDC_*` | bank | local | Customer sign-in through the bank's OpenID Connect provider (see [Identity providers](#identity-providers)) |
 | `STEP_UP_MAX_AGE` | bank | `300` | Seconds a sign-in stays fresh enough to consent or approve |
+| `VALET_POLICY_VERSION` | bank | unset | The bank's change reference for its policy, named on every receipt with the policy's hash. Unset: `unlabelled-<hash>`, and `/readyz` reports `labelled: false` |
 | `VALET_EXTERNAL_ISSUERS`, `VALET_INTERNAL_SECRET` | bank | unset | Native mode: accept the bank IdP's tokens; let it register consents |
 | `VALET_HANDOFF_SECRET`, `VALET_HANDOFF_IDPS` | bank | unset | Native mode: consent hand-off from the bank's IdP, and where results may be returned |
 | `KAYA_CONNECT_VIA` | Kaya | unset | Native mode: the IdP's metadata URL; Kaya connects through it |
 
 Limits live in `valet/bank/config.py`: token lifetimes (access 5 minutes, approval 5 minutes), maximum grant 90 days,
-maximum monthly limit R5,000, at most 3 approvals waiting at once.
+maximum monthly limit R5,000, at most 3 approvals waiting at once. Together with the profile version they form the policy document whose hash every receipt
+carries (`GET /ops/policies`; [Technical design](docs/technical-design.md) §8.2).
 
 ## What this is not
 

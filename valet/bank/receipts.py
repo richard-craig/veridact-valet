@@ -24,11 +24,14 @@ class Receipts:
     def __init__(self, store: Store, key: Key):
         self.store = store
         self.key = key
+        self.policy: Any = None          # set by the bank once its policy is known (policy.py)
 
     def append(self, **fields: Any) -> dict[str, Any]:
         if fields.get("grant_id") and "mandate" not in fields:
             g = self.store.one("SELECT version FROM grants WHERE id=?", fields["grant_id"])
             fields["mandate"] = {"id": fields["grant_id"], "version": (g["version"] if g else None) or 1}
+        if self.policy is not None and "policy" not in fields:
+            fields["policy"] = self.policy.ref       # the bank's rules in force, besides the customer's mandate
         with self.store.lock:
             last = self.store.one("SELECT seq, hash FROM receipts ORDER BY seq DESC LIMIT 1")
             seq = (last["seq"] + 1) if last else 1

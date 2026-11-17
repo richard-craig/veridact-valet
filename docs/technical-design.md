@@ -1,6 +1,6 @@
 # Veridact Valet: Technical Design
 
-Version 0.6 · 16 November 2026
+Version 0.7 · 17 November 2026
 
 ## 1. Scope and key decisions
 
@@ -364,7 +364,7 @@ Debtor ownership, account status and payee eligibility are confirmed by the bank
 | Pause all | Customer | Every grant for that customer paused at once | Yes |
 | Revoke (disconnect) | Customer, bank | Grant revoked; refresh tokens deleted; approvals and unaccepted payments cancelled as for pause | No; the agent must connect again |
 | Expiry | Automatic | Grant becomes `expired` at `expires`; renewal needs fresh customer consent | No |
-| Denylisted | Bank | Every call for that client, operator or key refused with `agent_denied` on the next request, on every node sharing the database; checked again before any payment is sent (§9.1) | When the bank removes the entry |
+| Denylisted | Bank | Every call for that client, operator or key refused with `agent_denied` on the next request, on every node sharing the database; every approval not yet used and every payment the bank has not accepted cancelled, as for pause; checked again before any payment is sent; recorded in the receipt chain (§9.1) | When the bank removes the entry; cancelled approvals and payments stay cancelled |
 | Agent untrusted | Bank, or Veridact revoking the operator | All grants for that agent refused with `agent_untrusted` within the registry cache (60 s) (§9.1) | When trust is restored |
 
 The activity page tells the customer what stopping did to payments, including when one was already with the bank and may still complete; the pause or revoke receipt records the counts.
@@ -381,8 +381,12 @@ Access tokens last 5 minutes, but that is not the safety mechanism: the live gra
  "action": "payment", "detail": {"to": "City Power", "amount": "1250.00", "currency": "ZAR"},
  "outcome": "allowed", "basis": "approval", "approval": "ar_51b0…",
  "payment_intent": "pi_8Qm2…", "idempotency_key": "city-power-oct-2026", "bank_payment_id": "bp_Jx41…",
- "intent_evidence": "customer_confirmed", "grant_level": "bill_payer"}
+ "intent_evidence": "customer_confirmed", "grant_level": "bill_payer",
+ "mandate": {"id": "g_3fa8…", "version": 1},
+ "policy": {"version": "CHG-2026-1182", "hash": "sha256:4be0…"}}
 ```
+
+- `mandate` names what the customer allowed, and its version (§3.1). `policy` names the rules the bank applied on top: its change reference and the hash of the full policy document (§8.2). Together they are the terms a dispute replays.
 
 - `hash` = SHA-256 of the JCS-canonical record; `signature` = ES256 over the hash with the bank’s receipt key. Changing or deleting any receipt breaks every later link.
 - `basis` is `grant` (inside the customer’s standing mandate), `approval` (customer approved in the bank app) or `refused` with a reason. `outcome` also records `failed` (the bank declined) and `unknown` (the bank did not answer; a later receipt records how it was settled). `intent_evidence` says how much the record shows about what the customer wanted (§8.1).
@@ -396,7 +400,7 @@ Access tokens last 5 minutes, but that is not the safety mechanism: the live gra
 - **Every party holds a copy.** Each API response carries its signed receipt, so the agent operator keeps its own copy and the customer sees it in the app. A dispute can then be examined from the same record without trusting one party's database.
 - **Personal data stays outside the chain.** Records hold pseudonymous ids and hashes. Names, account numbers and payee details sit in a separate table the bank can erase under POPIA without breaking the chain.
 - **Key rotation.** Each receipt names its signing key (kid), and retired public keys stay in /jwks, so old chains still verify.
-- **Also recorded.** The triggering instruction (agent-supplied, labelled as such), the mandate version, and the policy result and any risk score, stored separately.
+- **Also recorded.** The triggering instruction (agent-supplied, labelled as such), and the policy result and any risk score, stored separately. (The mandate version and the policy in force are on every receipt from version 0.7.)
 
 ### 8.1 What a receipt proves, and what it does not
 
@@ -414,6 +418,27 @@ The bank decides which tier each kind of payment needs: the stronger tiers for n
 **The payment evidence page.** In the bank app, tapping a payment in an agent's activity opens one page with everything the bank holds about it, in plain language: who asked (the agent, its operator, its key), what the customer allowed (the mandate and the consent record), whose decision it was (inside the standing limit, or approved by the customer, with what the bank asked and the agent's note), and what the bank did (the outcome and the bank's own payment reference). It lists every signed record for that payment in order, anything else stopped or held that day, and whether the record chain verifies. It reads what is already recorded and changes nothing about how payments work. Built for the customer; a staff-side view of the same data for dispute handlers is not built.
 
 Four kinds of evidence stay distinguishable in every record: **authentication** (who called, with which key), **mandate** (what was delegated, and the consent behind it), **customer approval** (for this exact payment, if any) and **execution** (what the bank's payment system did, by its own payment id). Liability between the customer, the bank and the agent operator is a matter for the bank's terms, the operator agreement and the law; the receipts are the evidence those rely on.
+
+### 8.2 The policy in force, on every receipt
+
+**A receipt names two sets of terms: the customer's mandate and the bank's policy. A dispute that can replay only the mandate cannot explain a decision the bank's rules made.** A limit can be refused because of the customer's R2,000 or because of the bank's R5,000 ceiling; an approval can be demanded because of the payee or because of the bank's step-up age.
+
+- **The policy document** (`valet/bank/policy.py`) is every setting that changes what an agent may do or how a decision is made: the Valet profile version (check order, error codes, access levels and their wording), the bank's ceilings (monthly limit, grant length), step-up age, key-binding mode, approval lifetime and maximum pending approvals, token lifetimes and the refresh retry window, reconciliation and escalation times, and the registry cache. It holds strings and integers only, so its canonical hash is exact.
+- **Every receipt carries `"policy": {"version", "hash"}`.** `version` is the bank's own change reference (`VALET_POLICY_VERSION`, for example a change ticket); `hash` identifies the document. The reference sits inside the signed, chained record, so the policy a decision was made under cannot be swapped afterwards.
+- **Every document the deployment has run with is kept** (`GET /ops/policies`), keyed by hash. A changed setting gives a new hash at the next start, and both are kept. A stored document is checked against its hash before it is relied on.
+- **An unlabelled policy is visible.** With no change reference set, the version is `unlabelled-` plus the start of the hash, and `GET /readyz` reports `"labelled": false`, so a go-live check can refuse to start.
+
+**Not covered yet.** The policy is read at start-up, so a bank changes it by deploying; there is no live policy editing, and therefore no policy change mid-request to reason about. Per-customer policy (a bank that sets a lower ceiling for one segment) would add a policy reference per grant; not built.
+
+### 8.3 Evidence packs: exporting the record for a dispute or an incident
+
+**`GET /ops/evidence?grant_id=…` (or `?client_id=…` for every grant of one agent) exports everything the bank holds about it, in a form anyone can check offline with only the bank's published receipt key.** Built and tested (`tests/test_evidence.py`).
+
+A pack (`valet-evidence-pack/1`, `valet/bank/evidence.py`) holds: the grants in scope (terms, status, key binding, consent hash, mandate version); every receipt for them, with its hash and the bank's signature; the payment intents and the bank's answers; every policy document those receipts name; the denylist entries that reach them; the reason for the export (a dispute or incident reference); the head of the whole chain at export time, signed, and the chain check run at export; and the bank's public receipt key. The bank signs the whole pack with its receipt key.
+
+`verify_pack(pack, trusted_jwk)` checks each receipt's hash and signature, the order and links of consecutive receipts, each policy document against its hash, that every policy a receipt names is included, the signed chain head, and the pack signature. Pass the bank's **published** key: the copy inside the pack proves nothing on its own, and the result says which key was used.
+
+**What a pack does not prove.** Receipts sit in one chain for the whole bank, so a pack proves each receipt is genuine and unaltered, and links receipts that are consecutive, but not that no receipt for this grant is missing between them. Per-grant chains with published heads (§8, target) close that. A pack also contains personal data (payee names and account numbers in payment receipts) until personal data moves outside the chain; treat it under the bank's POPIA controls.
 
 ## 9. Agent identity and the Veridact interface
 
@@ -457,6 +482,16 @@ The consent screen shows the operator name only from the registry, never from th
 
 The denylist is the emergency brake for an incident; the registry is the standing source of trust. Removing a denylist entry (`DELETE /ops/denylist/{kind}/{value}`) takes effect on the next request too.
 
+**What the emergency stop does, in order** (version 0.7):
+
+1. **Refuses** every call by the client, the operator's agents or the key from the next request, on the direct API, the MCP gateway and the Consent Service's decision point (`agent_denied`). One exception: a resource server that caches a Consent Service permit for a read (up to `cache_ttl_seconds`, 30) sees the stop when that cache entry expires; amounts are never cached.
+2. **Sweeps** every live grant the entry reaches: approvals not yet used are cancelled, and payments the bank has not accepted are cancelled, or sent to cancel-or-confirm if they may already be with the bank (§5.1). A payment that was already accepted completes, and the summary says so.
+3. **Records** a receipt on each grant it reached (who stopped it, why, what was cancelled) and one bank-level receipt naming every grant, so the stop is in the same signed chain as the decisions it interrupted.
+4. **Returns** the incident summary: grants reached, approvals cancelled, payments cancelled, already paid, and still with the bank. Payments still with the bank go to the `payments-unknown-outcome` queue if the bank does not answer, still held.
+5. **Lifting** the entry is recorded too. Grants keep their status throughout, so access returns on the next request, but anything cancelled stays cancelled and must be asked for again.
+
+The check just before a payment is sent stays, for the race where another node writes the entry after a request passed its checks. Evidence for the incident is exported as a pack (§8.3).
+
 **If the registry cannot be reached**, Valet keeps the last good copy and marks the registry unavailable. Payments fail closed at once (503 `registry_unavailable`). Reads may use the last good copy for one more cache period (60 seconds), then fail closed too. The denylist does not depend on the registry and keeps working. `GET /readyz` reports whether the registry is reachable. Built and tested (`tests/test_stopping.py`).
 
 ### 9.2 Vendor-hosted agent identity (CIMD), proposed
@@ -493,7 +528,7 @@ Agent ecosystems identify an agent by an HTTPS URL serving its metadata and sign
 | POST /handoff/decision | Browser | The same ticket, single use | Creates the grant from the customer's choice under the bank's policy and binds it to the ticket's `dpop_jkt`, then auto-posts a signed result (grant id or deny, same nonce) back into the IdP's login |
 | DELETE /internal/grants/{id} | The bank's IdP | Shared secret in the PoC; mTLS in production | Native mode: the customer disconnected the agent in the IdP's own account pages; revokes the grant and writes a receipt |
 
-Customer and operations pages on the bank: `GET/POST /login`, `POST /logout`, `GET /app`, `GET /app/agents/{grant}`, `GET /app/agents/{grant}/payments/{payment_intent_id}` (the payment evidence page, §8.1), `POST /app/agents/{grant}/{pause|resume|revoke}`, `POST /app/pause-all`, `GET /app/approvals`, `GET/POST /app/approvals/{id}`, `GET /ops`, `POST /ops/agents/{client_id}/trust`, `POST /ops/payments/reconcile`, `GET /ops/payments/escalated` (the `payments-unknown-outcome` queue), `POST /ops/denylist`, `DELETE /ops/denylist/{kind}/{value}`, `GET /receipts/verify`, and `GET /readyz` (the go-live check: key-binding mode, payments adapter and whether it can cancel, registry reachability, denylist size, escalated payments).
+Customer and operations pages on the bank: `GET/POST /login`, `POST /logout`, `GET /app`, `GET /app/agents/{grant}`, `GET /app/agents/{grant}/payments/{payment_intent_id}` (the payment evidence page, §8.1), `POST /app/agents/{grant}/{pause|resume|revoke}`, `POST /app/pause-all`, `GET /app/approvals`, `GET/POST /app/approvals/{id}`, `GET /ops`, `POST /ops/agents/{client_id}/trust`, `POST /ops/payments/reconcile`, `GET /ops/payments/escalated` (the `payments-unknown-outcome` queue), `POST /ops/denylist` (returns the incident summary, §9.1), `DELETE /ops/denylist/{kind}/{value}`, `GET /ops/evidence?grant_id=…|client_id=…` (the evidence pack, §8.3), `GET /ops/policies` (the policy in force and its history, §8.2), `GET /receipts/verify`, and `GET /readyz` (the go-live check: key-binding mode, payments adapter and whether it can cancel, registry reachability, denylist size, escalated payments, and the policy in force and whether the bank labelled it).
 
 **A payment inside the grant:**
 
@@ -632,7 +667,7 @@ The extension uses Keycloak's internal authenticator and protocol-mapper SPIs, a
 ```bash
 pip install -r requirements.txt
 python demo.py          # scripted end-to-end run: 13 steps, 24 checks
-python -m pytest -q     # 115 behaviour tests, including payment safety and stopping payments, both identity-provider modes and the consent hand-off
+python -m pytest -q     # 124 behaviour tests, including payment safety, stopping payments, the emergency stop and evidence packs, both identity-provider modes and the consent hand-off
 python run.py           # clickable: Kaya http://localhost:8001, Marula Bank http://localhost:8000 (thandi / demo)
 
 docker compose up --build        # the same clickable demo in containers
@@ -661,6 +696,8 @@ python deploy/keycloak/setup_native.py
 | 11 | Trust in Kaya's operator is withdrawn | Every grant for Kaya stops at once |
 | 12 | Thandi disconnects Kaya | Immediate and final |
 | 13 | A receipt is altered | The signed hash chain shows exactly where |
+
+**Verified on 17 November 2026 (version 0.7):** 24 of 24 checks and 124 of 124 tests passed on Python 3.11 and 3.13, including the new evidence tests (§17). The Keycloak preflight was not re-run; the Keycloak extension did not change.
 
 **Verified on 16 November 2026 (version 0.6):** 24 of 24 checks and 115 of 115 tests passed on Python 3.11 and 3.13, including the new stopping tests (§17). The native-mode Keycloak preflight was not re-run for 0.6; the Keycloak extension did not change.
 
@@ -784,6 +821,11 @@ Decisions of 16 November 2026 on the items version 0.4 left open.
 | Intents and receipts name the mandate and version | §3.1 | `test_stopping.py::test_intents_and_receipts_carry_the_mandate_id_and_version` |
 | Copied refresh token pauses the grant | §4.1 | `test_valet.py`: refresh reuse |
 | Receipts are tamper-evident | §8 | `test_valet.py`, and the demo's last check |
+| Every receipt names the policy in force; a changed policy document is detected | §8.2 | `test_evidence.py::test_every_receipt_names_the_policy_in_force…`, `…a_tampered_document_is_detected` |
+| The denylist cancels approvals and unaccepted payments, and the stop is in the receipt chain | §9.1 | `test_evidence.py::test_the_denylist_cancels_approvals_and_held_payments_and_records_the_stop` |
+| An operator entry reaches every grant of its agents, and nothing else | §9.1 | `test_evidence.py::test_denylisting_an_operator…` |
+| The denylist reaches Consent Service apps | §9.1 | `test_consents.py::test_the_banks_denylist_stops_a_consent_service_app…` |
+| An evidence pack verifies offline; an edited receipt, swapped policy or foreign key is caught | §8.3 | `test_evidence.py::test_an_evidence_pack_verifies_offline…`, `…a_changed_receipt_policy_or_pack_is_caught…` |
 
 **What these tests do not prove, and the POC must.** The PoC runs on SQLite, where one writer at a time makes the locked steps easy. A bank deployment runs several nodes on a shared database. **Postgres support, with concurrency and failure-injection tests, is a POC deliverable:** parallel payments and parallel pause-and-pay across nodes (row locks or serialisable transactions on the intent and the ledger), a node killed between the hold and the instruction, a database failover mid-payment, and the real adapter's cancel racing its execute. The guarantees above are only claimed for a deployment once those tests pass against its own database and payments adapter.
 
@@ -802,4 +844,16 @@ Decisions of 16 November 2026 on proposals for version 0.6.
 | Mandate references | The cheap half now: mandate id and version 1 on every grant, intent and receipt. Editing and real versions stay deferred (§3.1) | Built |
 | Wording and architecture diagram | "An authorisation and transaction-control layer that initiates execution through a bank-controlled payment API"; the Payment Intent Service and the operations queue are their own components (§1, §2) | Done |
 | Assurance | Guarantees mapped to tests; Postgres with concurrency and failure-injection testing is a POC deliverable (§17) | Documented; Postgres to do in the POC |
+
+## 19. Changes in version 0.7
+
+Version 0.7 (17 November 2026) closes the gaps found by mapping Valet against a bank control framework for AI agents: its minimum evidence set and its list of what stopping an agent must cover. The mapping, with autonomy tiers and the regulatory view, is in [Control framework mapping](control-framework-mapping.md).
+
+| Gap | Change | Status |
+| --- | --- | --- |
+| The evidence set asks for the policy version; receipts named only the mandate | Every receipt carries the bank's policy reference and the hash of the full policy document; every policy is kept and checkable; `/readyz` reports whether the bank labelled it (§8.2) | Built |
+| The emergency stop wrote no record and left approvals and held payments open until execution | The denylist sweeps every grant it reaches (approvals, unaccepted payments), writes a receipt per grant and one for the bank, returns the incident summary, and records when it is lifted (§9.1) | Built |
+| The Consent Service decision point did not read the denylist | It does, on every decision (`agent_denied`) (§9.1) | Built |
+| No way to preserve and hand over evidence | Signed evidence packs per grant or per agent, verifiable offline with the bank's published key (§8.3) | Built |
+| Versioned mandates | **Still deferred**, for the reason in §16: a mandate cannot be edited yet, so version 1 is exact. The receipt names the mandate version and the policy version, which is what an evidence set needs today; real versions arrive with mandate editing (§3.1) | Deferred, unchanged |
 

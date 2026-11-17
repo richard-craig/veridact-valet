@@ -16,7 +16,7 @@ agent builders, lawyers and risk people.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt pytest
-python -m pytest -q      # 115 tests
+python -m pytest -q      # 124 tests
 python demo.py           # 24 checks; exits non-zero if any protection fails
 ```
 
