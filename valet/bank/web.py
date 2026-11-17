@@ -21,6 +21,7 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..common.money import rand, to_cents
+from . import evidence
 from . import levels as L
 from .config import SAST
 from .idp import SignInError
@@ -488,15 +489,38 @@ def router(bank) -> APIRouter:
         """The bank stops an agent, an operator or a key at once, on every node, without waiting for the registry."""
         body = await request.json()
         try:
-            bank.deny(str(body.get("kind", "")), str(body.get("value", "")), str(body.get("reason", ""))[:200])
-        except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
-        return JSONResponse({"denied": {"kind": body["kind"], "value": body["value"]}})
+            out = bank.deny(str(body.get("kind", "")), str(body.get("value", "")), str(body.get("reason", ""))[:200],
+                            by=str(body.get("by") or "bank operations")[:100])
+        except ValueError:
+            return JSONResponse({"error": "invalid_request",
+                                 "error_description": "kind must be client_id, operator or jkt, and value is required"},
+                                status_code=400)
+        return JSONResponse(out)
 
     @r.delete("/ops/denylist/{kind}/{value}")
     def remove_from_denylist(kind: str, value: str):
-        bank.undeny(kind, value)
-        return JSONResponse({"removed": {"kind": kind, "value": value}})
+        return JSONResponse(bank.undeny(kind, value))
+
+    @r.get("/ops/evidence")
+    def evidence_pack(grant_id: str = "", client_id: str = "", reason: str = ""):
+        """An evidence pack for one grant or one agent: receipts with signatures, the policies they name, payment
+        intents, denylist entries and the signed chain head, checkable offline (design section 8.3)."""
+        try:
+            return JSONResponse(evidence.build(bank, grant_id=grant_id or None, client_id=client_id or None,
+                                               reason=reason))
+        except evidence.EvidenceNotFound as e:
+            # Fixed messages only: never echo exception text to the caller.
+            messages = {"scope_required": "name a grant_id or a client_id",
+                        "no_matching_grant": "no grant matches"}
+            return JSONResponse({"error": e.code, "error_description": messages.get(e.code, "not found")},
+                                status_code=404)
+
+    @r.get("/ops/policies")
+    def policies():
+        """The policy in force and every policy this deployment has run with (design section 8.2)."""
+        return JSONResponse({"current": {**bank.policy.ref, "labelled": bank.policy.labelled,
+                                         "document": bank.policy.document},
+                             "history": bank.policy.history()})
 
     @r.post("/ops/payments/reconcile")
     def reconcile_payments():

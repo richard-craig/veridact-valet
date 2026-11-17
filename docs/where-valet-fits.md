@@ -214,7 +214,10 @@ Google's Agent Payments Protocol (AP2) and Mastercard's Verifiable Intent were c
 | MCP gateway for Claude, bearer tier | **Built** for the demo; ChatGPT, Copilot and Gemini follow on the same gateway |
 | PingFederate native mode | **Designed**; consent hand-off and token-claim hook to be confirmed |
 | `act` claim, CIMD allowlist, Veridact accepting CIMD metadata | **Proposed** |
-| Versioned mandates, intent and triggering instruction on every receipt | **Proposed** ([Technical design](technical-design.md) §3.1) |
+| Mandate id and version, and the bank's policy version, on every receipt | **Built** ([Technical design](technical-design.md) §3.1, §8.2) |
+| Emergency stop that sweeps in-flight work and is recorded; signed evidence packs | **Built** ([Technical design](technical-design.md) §8.3, §9.1) |
+| Editable, versioned mandates; intent and triggering instruction on every receipt | **Proposed** ([Technical design](technical-design.md) §3.1) |
+| Mapping to bank AI-agent control frameworks, autonomy tiers and regulation | [Control framework mapping](control-framework-mapping.md) |
 | Regulatory view (SARB Directive 2 of 2024) | Counsel's view to be taken |
 
 Valet is a proof of concept, not production software. The PoC's fictional bank, agent and customer exist to show the design working end to end.

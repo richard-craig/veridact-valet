@@ -151,11 +151,17 @@ class Store:
         if status in ("paused", "revoked"):
             # Pause is the panic button: the customer's latest action wins. Approvals waiting for an answer, and
             # approvals given but not yet used, are cancelled; after resume the agent must ask again.
-            self.x("UPDATE approvals SET status='cancelled' WHERE grant_id=? AND (status='pending' OR "
-                   "(status='approved' AND consumed=0))", grant_id)
-            self.x("DELETE FROM hints WHERE grant_id=?", grant_id)   # actions offered for the IdP's own approvals
+            self.cancel_waiting(grant_id)
         if status == "revoked":
             self.x("DELETE FROM refresh WHERE grant_id=?", grant_id)
+
+    def cancel_waiting(self, grant_id: str) -> int:
+        """Cancel every approval not yet used (pending, or given but not consumed) and every action offered for the
+        IdP's own approvals. Used by pause, revoke and the bank's denylist. Returns the approvals cancelled."""
+        n = self.x("UPDATE approvals SET status='cancelled' WHERE grant_id=? AND (status='pending' OR "
+                   "(status='approved' AND consumed=0))", grant_id)
+        self.x("DELETE FROM hints WHERE grant_id=?", grant_id)
+        return n
 
     def spent(self, grant_id: str, month: str | None = None) -> int:
         row = self.one("SELECT spent FROM ledger WHERE grant_id=? AND month=?", grant_id, month or month_key())

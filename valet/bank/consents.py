@@ -515,6 +515,8 @@ class ConsentService:
             return answer("deny", "consent_not_found")
         if c["client_id"] != req.get("client_id"):
             return answer("deny", "client_mismatch")
+        if self.bank.denied(c["client_id"]):          # the bank's emergency stop, read on every decision (no cache)
+            return answer("deny", "agent_denied")
         st = c["status"]
         if st != "Authorised":
             return answer("deny", {"Revoked": "consent_revoked", "Expired": "consent_expired",

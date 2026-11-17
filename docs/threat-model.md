@@ -1,6 +1,6 @@
 # Veridact Valet: Threat Model
 
-Version 0.3 · 16 November 2026 · For bank security architects, CISOs and risk teams
+Version 0.4 · 17 November 2026 · For bank security architects, CISOs and risk teams
 
 **What this document answers:** for each way an agent reaches a customer's account, what can go wrong, which controls Valet provides, which controls the bank must provide, and what risk remains. Every control is labelled with its real status, so nothing here claims more than the code does.
 
@@ -103,8 +103,10 @@ flowchart LR
 | Intent evidence in receipts | Each payment receipt says whether it shows a standing mandate or a customer-confirmed payment | **Built** (two tiers); recorded authentication context **Designed** (Technical design §8.1) |
 | Signed, hash-chained receipts | Every decision, allowed or refused; any change or deletion breaks every later link | **Built** |
 | Agent trust can be withdrawn | Registry marks an agent untrusted; all its grants are refused within 60 seconds. If the registry cannot be reached, payments fail closed at once | **Built** |
-| Emergency stop (denylist) | The bank denylists a client, operator or key; refused on the next request on every node, and checked again before any payment is sent | **Built** (Technical design §9.1) |
+| Emergency stop (denylist) | The bank denylists a client, operator or key; refused on the next request on every node (direct API, MCP gateway and Consent Service), and checked again before any payment is sent. The stop cancels approvals and unaccepted payments for every grant it reaches and is recorded in the receipt chain | **Built** (Technical design §9.1) |
 | Versioned mandates | Every intent and receipt names the mandate id and version (always 1 today: built); editing a mandate into new versions is **Designed** (Technical design §3.1) | **Built** in part |
+| Policy version in receipts | Every receipt names the bank's policy in force: its change reference and the hash of the full policy document, which is kept and checkable | **Built** (Technical design §8.2) |
+| Evidence packs | Everything held for one grant or one agent (receipts with signatures, the policies they name, payment intents, denylist entries, signed chain head) exported and verifiable offline with the bank's published key | **Built** (Technical design §8.3); retention and legal hold are **Bank** |
 | Triggering instruction in receipts | Records the instruction behind each action, labelled as agent-supplied | **Designed** |
 | Signing keys in an HSM; receipt retention | | **Bank** |
 | Customer sign-in strength (passkeys, step-up, account-takeover detection) | | **Bank** |
@@ -332,6 +334,8 @@ How a session stays alive: the assistant receives a refresh token and gets new 5
 | G14 | FAPI 2.0 conformance not run. Refresh rotation differs from the profile by choice; the demo's RS256 tokens differ by configuration | J1 | Technical design §4.1, §14.1 | Valet + bank |
 | G15 | Mandates are not versioned (deferred until customers can edit a mandate; today a change means a new consent and a new grant), and approvals do not record the authentication behind them | All | Technical design §3.1, §8.1, §16 | Valet |
 | G16 | Closed in 0.3: the MCP gateway now uses the same payment intents as the direct API | J2 | Technical design §5.1 | Done |
+| G17 | An evidence pack proves each receipt genuine, but not that none is missing between them, because the chain is bank-wide | All | Per-grant chains with published heads (Technical design §8, §8.3) | Valet |
+| G18 | Closed in 0.7: receipts name the policy in force; the emergency stop sweeps in-flight work, is recorded, and reaches the Consent Service | All | Technical design §8.2, §9.1 | Done |
 
 ## 8. Assumptions
 

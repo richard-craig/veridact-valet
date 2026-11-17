@@ -318,3 +318,18 @@ def test_calendar_and_consent_aligned_periods():
     anchor = datetime(2026, 1, 31, 9, 0, tzinfo=sast).timestamp()
     s, e = period_bounds("Month", "Consent", anchor, datetime(2026, 3, 5, tzinfo=sast).timestamp())
     assert at(s).month == 2 and at(e).month == 3   # Jan 31 -> Feb 28 -> Mar 28
+
+
+def test_the_banks_denylist_stops_a_consent_service_app_on_the_next_decision():
+    async def t():
+        w = World()
+        c = (await w.create(AIS)).json()
+        result_of(await w.approve(c["consent_id"]))
+        tok = w.app_token(c["consent_id"])
+        assert (await w.api("GET", "/ob/v1/accounts", tok)).status_code == 200
+        w.h.bank.deny("client_id", "acme-budgeting", "incident 52")
+        stopped = await w.api("GET", "/ob/v1/accounts", tok)
+        assert stopped.status_code == 403 and stopped.json()["detail"] == "agent_denied"
+        w.h.bank.undeny("client_id", "acme-budgeting")
+        assert (await w.api("GET", "/ob/v1/accounts", tok)).status_code == 200
+    run(t())

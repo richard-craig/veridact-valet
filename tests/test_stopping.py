@@ -190,8 +190,11 @@ def test_the_denylist_is_checked_again_at_execution():
         gid = await h.connect()
         held = await held_for_approval(h)
         await h.decide(held["auth_req_id"])
-        h.bank.deny("operator", h.bank.registry.lookup("kaya").operator, "operator suspended")
         intent, grant = h.bank.payments.get(held["payment_intent_id"]), h.bank.store.grant(gid)
+        # The race: another node writes the denylist entry after this request passed its checks and before its
+        # instruction is sent, and before that node's stop sweep reaches this intent (raw insert, no sweep).
+        h.bank.store.x("INSERT INTO denylist VALUES (?,?,?,?)", "operator",
+                       h.bank.registry.lookup("kaya").operator, "operator suspended", time.time())
         done = h.bank.payments.execute(intent, grant)                   # a request checked just before the denial
         assert done["status"] == "cancelled" and balance(h) == OPENING and h.bank.payments.reserved(gid) == 0
     run(t())

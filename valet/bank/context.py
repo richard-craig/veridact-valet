@@ -12,6 +12,7 @@ from .config import BankConfig
 from .core import CoreBanking, DemoCore
 from .idp import OidcConfig, OidcSignIn
 from .payments import Payments
+from .policy import Policy
 from .receipts import Receipts
 from .registry import AgentRecord, StaticRegistry
 from .store import Store
@@ -60,6 +61,9 @@ class Bank:
         # Native mode: tokens issued by the bank's own authorisation server, verified with its published keys.
         self.external_issuers = external_issuers if external_issuers is not None else external_issuers_from_env()
         self.key_binding = self._key_binding_mode()
+        # The bank's policy in force: hashed, kept, and named on every receipt from here on (design section 8.2).
+        self.policy = Policy(self.store, self.cfg, self.key_binding)
+        self.receipts.policy = self.policy
 
     # ------------------------------------------------- deployment safety
     def _key_binding_mode(self) -> str:
@@ -86,7 +90,8 @@ class Bank:
                              "available": getattr(reg, "unavailable_since", None) is None},
                 "denylist_entries": self.store.one("SELECT COUNT(*) n FROM denylist")["n"],
                 "payments_escalated": len(self.payments.escalated()),
-                "native_issuers": sorted(self.external_issuers)}
+                "native_issuers": sorted(self.external_issuers),
+                "policy": {**self.policy.ref, "labelled": self.policy.labelled}}
 
     def native_issuer(self, hint: str | None = None) -> str | None:
         """The token issuer a native-mode grant is bound to: the one named, or the only one configured."""
@@ -95,13 +100,59 @@ class Bank:
         return next(iter(self.external_issuers)) if len(self.external_issuers) == 1 else None
 
     # ------------------------------------------------- the bank's denylist and stopping a grant
-    def deny(self, kind: str, value: str, reason: str) -> None:
+    def deny(self, kind: str, value: str, reason: str, by: str = "bank operations") -> dict[str, Any]:
+        """The emergency stop (design section 9.1). From the next request every call by the agent, operator or key is
+        refused. Then, for every grant it covers: approvals not yet used are cancelled, payments the bank has not
+        accepted are cancelled (cancel-or-confirm, section 5.1), and a receipt records what was stopped. The grants
+        keep their status, so lifting the entry restores access, but anything cancelled must be asked for again.
+        Returns the incident summary."""
         if kind not in ("client_id", "operator", "jkt"):
             raise ValueError("kind is client_id, operator or jkt")
+        if not value:
+            raise ValueError("value is required")
         self.store.x("INSERT OR REPLACE INTO denylist VALUES (?,?,?,?)", kind, value, reason, time.time())
+        why = f"{kind} denylisted by the bank: {reason}"
+        totals = {"grants": 0, "approvals_cancelled": 0, "cancelled": 0, "already_paid": 0, "with_bank": 0}
+        stopped: list[str] = []
+        for g in self._grants_covered(kind, value):
+            approvals = self.store.cancel_waiting(g["id"])
+            payments = self.payments.stop_grant(g, why)
+            self.receipts.append(grant_id=g["id"], agent=g["client_id"], customer=g["customer"], action="denylist",
+                                 outcome="done", basis="bank", reason=reason, by=by,
+                                 denylist={"kind": kind, "value": value},
+                                 approvals_cancelled=approvals, payments=payments)
+            stopped.append(g["id"])
+            totals["grants"] += 1
+            totals["approvals_cancelled"] += approvals
+            for k, v in payments.items():
+                totals[k] += v
+        # The bank-level record of the stop itself, naming every grant it reached.
+        rec = self.receipts.append(action="denylist_add", outcome="done", basis="bank", reason=reason, by=by,
+                                   denylist={"kind": kind, "value": value}, grants=stopped, totals=totals)
+        return {"denied": {"kind": kind, "value": value}, "stopped": totals, "grants": stopped,
+                "receipt": rec["hash"]}
 
-    def undeny(self, kind: str, value: str) -> None:
-        self.store.x("DELETE FROM denylist WHERE kind=? AND value=?", kind, value)
+    def undeny(self, kind: str, value: str, by: str = "bank operations") -> dict[str, Any]:
+        removed = self.store.x("DELETE FROM denylist WHERE kind=? AND value=?", kind, value)
+        rec = None
+        if removed:
+            rec = self.receipts.append(action="denylist_remove", outcome="done", basis="bank", by=by,
+                                       denylist={"kind": kind, "value": value})
+        return {"removed": {"kind": kind, "value": value}, "was_listed": bool(removed),
+                "receipt": rec["hash"] if rec else None}
+
+    def _grants_covered(self, kind: str, value: str) -> list[dict[str, Any]]:
+        """Live grants (active or paused) that a denylist entry reaches."""
+        live = "status IN ('active','paused')"
+        if kind == "client_id":
+            rows = self.store.q(f"SELECT id FROM grants WHERE client_id=? AND {live}", value)
+        elif kind == "jkt":
+            rows = self.store.q(f"SELECT id FROM grants WHERE jkt=? AND {live}", value)
+        else:   # operator: every agent the registry says that operator runs
+            clients = [r["client_id"] for r in self.store.q(f"SELECT DISTINCT client_id FROM grants WHERE {live}")
+                       if (rec := self.registry.lookup(r["client_id"])) and rec.operator == value]
+            rows = [r for c in clients for r in self.store.q(f"SELECT id FROM grants WHERE client_id=? AND {live}", c)]
+        return [g for r in rows if (g := self.store.grant(r["id"])) and g["status"] in ("active", "paused")]
 
     def denied(self, client_id: str, jkt: str | None = None) -> str | None:
         """Why the bank has stopped this agent, operator or key, or None. Read from the database on every call, so a
