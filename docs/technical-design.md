@@ -667,7 +667,7 @@ The extension uses Keycloak's internal authenticator and protocol-mapper SPIs, a
 ```bash
 pip install -r requirements.txt
 python demo.py          # scripted end-to-end run: 13 steps, 24 checks
-python -m pytest -q     # 124 behaviour tests, including payment safety, stopping payments, the emergency stop and evidence packs, both identity-provider modes and the consent hand-off
+python -m pytest -q     # 125 behaviour tests, including payment safety, stopping payments, the emergency stop and evidence packs, both identity-provider modes and the consent hand-off
 python run.py           # clickable: Kaya http://localhost:8001, Marula Bank http://localhost:8000 (thandi / demo)
 
 docker compose up --build        # the same clickable demo in containers
@@ -697,7 +697,7 @@ python deploy/keycloak/setup_native.py
 | 12 | Thandi disconnects Kaya | Immediate and final |
 | 13 | A receipt is altered | The signed hash chain shows exactly where |
 
-**Verified on 17 November 2026 (version 0.7):** 24 of 24 checks and 124 of 124 tests passed on Python 3.11 and 3.13, including the new evidence tests (§17). The Keycloak preflight was not re-run; the Keycloak extension did not change.
+**Verified on 17 November 2026 (version 0.7):** 24 of 24 checks and 125 of 125 tests passed on Python 3.11 and 3.13, including the new evidence tests (§17). The Keycloak preflight was not re-run; the Keycloak extension did not change.
 
 **Verified on 16 November 2026 (version 0.6):** 24 of 24 checks and 115 of 115 tests passed on Python 3.11 and 3.13, including the new stopping tests (§17). The native-mode Keycloak preflight was not re-run for 0.6; the Keycloak extension did not change.
 

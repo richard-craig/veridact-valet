@@ -491,8 +491,10 @@ def router(bank) -> APIRouter:
         try:
             out = bank.deny(str(body.get("kind", "")), str(body.get("value", "")), str(body.get("reason", ""))[:200],
                             by=str(body.get("by") or "bank operations")[:100])
-        except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
+        except ValueError:
+            return JSONResponse({"error": "invalid_request",
+                                 "error_description": "kind must be client_id, operator or jkt, and value is required"},
+                                status_code=400)
         return JSONResponse(out)
 
     @r.delete("/ops/denylist/{kind}/{value}")
@@ -506,8 +508,12 @@ def router(bank) -> APIRouter:
         try:
             return JSONResponse(evidence.build(bank, grant_id=grant_id or None, client_id=client_id or None,
                                                reason=reason))
-        except LookupError as e:
-            return JSONResponse({"error": str(e)}, status_code=404)
+        except evidence.EvidenceNotFound as e:
+            # Fixed messages only: never echo exception text to the caller.
+            messages = {"scope_required": "name a grant_id or a client_id",
+                        "no_matching_grant": "no grant matches"}
+            return JSONResponse({"error": e.code, "error_description": messages.get(e.code, "not found")},
+                                status_code=404)
 
     @r.get("/ops/policies")
     def policies():

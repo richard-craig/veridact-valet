@@ -176,3 +176,16 @@ def test_an_evidence_pack_for_an_agent_covers_all_its_grants():
         assert [g["id"] for g in pack["grants"]] == [gid]
         assert verify_pack(pack, trusted_jwk=h.bank.receipt_key.jwk)["ok"]
     run(t())
+
+
+def test_ops_errors_return_fixed_messages_never_exception_text():
+    async def t():
+        h = Harness()
+        missing = await h.browser.get("/ops/evidence?grant_id=g_nope")
+        assert missing.status_code == 404 and missing.json() == {"error": "no_matching_grant",
+                                                                 "error_description": "no grant matches"}
+        unscoped = await h.browser.get("/ops/evidence")
+        assert unscoped.status_code == 404 and unscoped.json()["error"] == "scope_required"
+        bad = await h.browser.post("/ops/denylist", json={"kind": "colour", "value": "x"})
+        assert bad.status_code == 400 and bad.json()["error"] == "invalid_request"
+    run(t())

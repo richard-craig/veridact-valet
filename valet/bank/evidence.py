@@ -34,6 +34,14 @@ from .context import Bank
 from .policy import Policy
 
 FORMAT = "valet-evidence-pack/1"
+
+
+class EvidenceNotFound(Exception):
+    """Nothing matches the request. `code` is a fixed, safe message for the caller."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
 _GRANT_FIELDS = ("id", "customer", "sub", "client_id", "level", "details", "status", "created", "expires", "jkt",
                  "consent_hash", "version", "issuer")
 _INTENT_FIELDS = ("id", "grant_id", "client_id", "idem_key", "request_digest", "detail", "amount", "month", "status",
@@ -51,7 +59,7 @@ def _ints(row: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
 
 
 def build(bank: Bank, grant_id: str | None = None, client_id: str | None = None, reason: str = "") -> dict[str, Any]:
-    """An evidence pack for one grant, or for every grant of one agent. Raises LookupError if nothing matches."""
+    """An evidence pack for one grant, or for every grant of one agent. Raises EvidenceNotFound if nothing matches."""
     store = bank.store
     if grant_id:
         ids = [grant_id] if store.grant(grant_id) else []
@@ -60,9 +68,9 @@ def build(bank: Bank, grant_id: str | None = None, client_id: str | None = None,
         ids = [r["id"] for r in store.q("SELECT id FROM grants WHERE client_id=? ORDER BY created", client_id)]
         scope = {"client_id": client_id}
     else:
-        raise LookupError("name a grant_id or a client_id")
+        raise EvidenceNotFound("scope_required")
     if not ids:
-        raise LookupError("no grant matches")
+        raise EvidenceNotFound("no_matching_grant")
     grants = [_ints(store.grant(i), _GRANT_FIELDS) for i in ids]
 
     rows = store.q("SELECT * FROM receipts ORDER BY seq")
