@@ -52,7 +52,7 @@ class Harness:
         return re.search(r'name="csrf" value="([^"]+)"', html).group(1)
 
     async def consent(self, authorize_url: str, level: str = "bill_payer", monthly: int = 2_000_00,
-                      decision: str = "allow") -> tuple[str, dict[str, list[str]]]:
+                      decision: str = "allow", extra: dict | None = None) -> tuple[str, dict[str, list[str]]]:
         """The customer opens the bank's consent screen, chooses, and confirms. Returns the HTML seen and the redirect."""
         u = urlparse(authorize_url)
         page = await self.browser.get(u.path + "?" + u.query)
@@ -60,14 +60,19 @@ class Harness:
         q = parse_qs(u.query)
         r = await self.browser.post("/authorize/decision", data={
             "csrf": self.csrf(page.text), "client_id": q["client_id"][0], "request_uri": q["request_uri"][0],
-            "level": level, "monthly": str(monthly), "account": "acc_4821", "decision": decision})
+            "level": level, "monthly": str(monthly), "account": "acc_4821", "decision": decision, **(extra or {})})
         assert r.status_code == 303, r.text
         return page.text, parse_qs(urlparse(r.headers["location"]).query)
 
-    async def connect(self, level: str = "bill_payer", monthly: int = 2_000_00) -> str:
+    async def connect(self, level: str = "bill_payer", monthly: int = 2_000_00, **choices) -> str:
+        """Connect Kaya. `choices` are extra consent-form fields: payees (list), per_payment, count, approve_above
+        (cents) and intent."""
         await self.login()
         url, pending = await self.kaya.start_connect(level)
-        _, back = await self.consent(url, level, monthly)
+        extra = {k: (v if isinstance(v, list) else str(v)) for k, v in choices.items()}
+        if "payees" in extra:
+            extra["payees_shown"] = "1"
+        _, back = await self.consent(url, level, monthly, extra=extra)
         await self.kaya.finish_connect(back["code"][0], pending, back["state"][0], back["iss"][0])
         return self.kaya.session.grant_id
 

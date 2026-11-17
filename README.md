@@ -24,7 +24,7 @@ The proof of concept contains:
 | **Marula Bank** (`valet/bank`) | A fictional bank: a minimal OAuth 2.0 authorisation server (FAPI 2.0-aligned, conformance pending), a banking API with Valet's checks, Valet's grant service and payment intents, a fictional core banking system that executes payments, and the customer's "AI agents" screens. |
 | **Kaya** (`valet/agent`) | A fictional money-assistant agent and the small client SDK it uses. Kaya never sees a password, PIN or OTP. |
 | `demo.py` | A scripted end-to-end run: 13 steps, 24 checks, exits non-zero if any protection fails. |
-| `tests/` | 125 behaviour tests, including payment safety (retries, crashes, timeouts, cancel-or-confirm, pause mid-payment), the emergency stop, signed evidence packs, and the bank's own identity provider in both deployment modes. |
+| `tests/` | 145 behaviour tests: the Valet profile conformance suite, plus payment safety (retries, crashes, timeouts, cancel-or-confirm, pause mid-payment), the emergency stop, signed evidence packs, and the bank's own identity provider in both deployment modes. |
 | `extensions/keycloak-valet` | A Keycloak extension (Java) for native mode: hands the customer to Valet's consent screen mid-login and puts the Valet grant id in Keycloak's tokens. |
 
 > Marula Bank, Kaya, Kaya Labs and Thandi are fictional, as are all account numbers. This is a demonstration,
@@ -38,7 +38,7 @@ control of every decision.** Nothing in Valet calls home, and no customer data l
 
 | Valet provides (the project) | The bank keeps (its own deployment) |
 |---|---|
-| **The profile**: what "View only" and "Bill payer" mean as `authorization_details`, the approval rules, the check order on every call, error codes and the receipt format | **Customer identity and sign-in**: its existing IdP, app, passkeys or biometrics, and step-up policy |
+| **The profile** ([Valet profile](docs/valet-profile.md)): what "View only", "Approved payer" and "Bill payer" mean as `authorization_details`, the approval rules, the check order on every call, error codes and the receipt format | **Customer identity and sign-in**: its existing IdP, app, passkeys or biometrics, and step-up policy |
 | **Reference components**: grant service, enforcement for the banking API, approval flow, receipt chain, and an authorisation server for IdPs that lack the features | **Policy**: which access levels to offer, limit ceilings, grant lengths, which accounts, approval thresholds |
 | **Adapters and guides** for identity providers (OIDC sign-in for any provider; native mode for providers with PAR, RAR and DPoP) | **Which agents to admit**, and when to withdraw trust (the Veridact registry can inform this; the bank decides) |
 | **Screen designs** for consent, approvals and the AI agents list, as templates | **Its brand, its app and its push notifications** |
@@ -254,7 +254,7 @@ To start again, stop the servers and delete the `data/` folder (or `docker compo
 | A stolen authorisation code is useless, and nobody else can claim the grant | The agent names its key in the pushed request (`dpop_jkt`); the grant is bound to it when the customer consents, in both deployment modes | `test_payments.py`, `test_handoff.py`, Keycloak native run |
 | A retry, a crash or a timeout never pays twice | One payment intent per `Idempotency-Key`, on the direct API and the MCP gateway alike; Valet holds the amount and instructs the bank's payment system, idempotent on the intent id; an unanswered payment is `pending` and held, never "failed" | demo 4, `test_payments.py` |
 | Valet never executes a payment | One adapter (`valet/bank/core.py`) to the bank's payments API; the PoC's is a fictional core | `test_payments.py` |
-| Spending stays inside a monthly limit in rands, only to existing beneficiaries | Rich Authorization Requests (RFC 9396) types `valet_accounts` / `valet_payments`; a monthly ledger in SAST | demo 4, 7, test |
+| Spending stays inside the customer's named payees, a per-payment cap, a monthly payment count and a monthly limit in rands | Rich Authorization Requests (RFC 9396) types `valet_accounts` / `valet_payments`; one mandate check for both front doors; a monthly ledger in SAST | demo 4, 7, tests/test_profile.py |
 | Anything else needs the customer's approval, in the bank's app | The API returns `approval_required` with the exact action; the agent asks through CIBA (poll mode); the bank only accepts actions it offered | demo 5, test |
 | An approval covers one payment, exactly as shown | Single-use, 5-minute, digest-bound `valet_payment_once` token that can only finish the payment the bank held; it never adds a beneficiary, and it counts towards the month's total | demo 6, test |
 | Agents can never add beneficiaries | Hard refusal in the API, recorded | demo 8, test |

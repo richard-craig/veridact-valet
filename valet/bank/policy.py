@@ -24,11 +24,12 @@ from typing import Any
 
 from ..common.crypto import digest
 from . import levels as L
+from .mandate import REASONS
 from .config import BankConfig
 from .store import Store
 
 # The Valet profile this code implements: check order, error codes, access levels, approval rules, receipt format.
-PROFILE_VERSION = "valet-profile/0.7"
+PROFILE_VERSION = "valet-profile/0.8"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS policies (hash TEXT, version TEXT, document TEXT, first_used REAL,
@@ -44,7 +45,12 @@ def policy_document(cfg: BankConfig, key_binding: str) -> dict[str, Any]:
         "access_levels": {k: {"title": v["title"], "summary": v["summary"], "never": list(v["never"])}
                           for k, v in L.LEVELS.items()},
         "monthly_limit_choices_cents": list(L.MONTHLY_CHOICES),
-        "ceilings": {"max_monthly_limit_cents": int(cfg.max_monthly_limit), "max_grant_days": int(cfg.max_grant_days)},
+        "per_payment_choices_cents": list(L.PER_PAYMENT_CHOICES),
+        "monthly_count_choices": list(L.COUNT_CHOICES),
+        "approve_above_choices_cents": list(L.APPROVE_ABOVE_CHOICES),
+        "approval_reasons": list(REASONS),
+        "ceilings": {"max_monthly_limit_cents": int(cfg.max_monthly_limit), "max_grant_days": int(cfg.max_grant_days),
+                     "max_monthly_count": int(cfg.max_monthly_count), "default_monthly_count": int(cfg.default_monthly_count)},
         "authentication": {"step_up_max_age_s": int(cfg.step_up_max_age), "key_binding": key_binding},
         "approvals": {"ttl_s": int(cfg.approval_ttl), "max_pending": int(cfg.max_pending_approvals)},
         "tokens": {"access_ttl_s": int(cfg.access_ttl), "refresh_retry_window_s": int(cfg.refresh_retry_window)},

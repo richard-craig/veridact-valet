@@ -211,7 +211,7 @@ Every money-moving call returns exactly one of three outcomes, and the gateway m
 | `APPROVAL_REQUIRED` | Within the mandate, but needs the customer (per-payment approval, or escalated by risk) | Wait; poll the status helper |
 | `DECLINED` | A hard rule failed (payee not in mandate, cap exceeded, mandate paused, expired or revoked) | Stop |
 
-Each outcome carries machine-readable reason codes, such as `PAYEE_NOT_IN_MANDATE`, `PER_PAYMENT_CAP_EXCEEDED` or `MONTHLY_LIMIT_EXCEEDED`. The same codes go into the receipt, so the agent, the customer and the bank read one explanation. These outcomes are the MCP form of the core API's results ([Technical Design](technical-design.md) §10 and §14): APPROVED is a 200, APPROVAL_REQUIRED is approval_required, and DECLINED is any other 403. Reason codes are defined once, in the core profile.
+Each outcome carries machine-readable reason codes, such as `PAYEE_NOT_IN_MANDATE`, `PER_PAYMENT_CAP_EXCEEDED`, `MONTHLY_COUNT_REACHED` or `MONTHLY_LIMIT_EXCEEDED`. **Built in 0.8:** the gateway's mandate is the grant's `valet_payments` detail, checked by the same function as the direct API (`valet/bank/mandate.py`), in the same order, counting payments still waiting for the customer; `list_payees` returns only the mandate's payees ([Valet profile](valet-profile.md) §3). The same codes go into the receipt, so the agent, the customer and the bank read one explanation. These outcomes are the MCP form of the core API's results ([Technical Design](technical-design.md) §10 and §14): APPROVED is a 200, APPROVAL_REQUIRED is approval_required, and DECLINED is any other 403. Reason codes are defined once, in the core profile.
 
 **Requirements:**
 
