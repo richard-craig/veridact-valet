@@ -29,11 +29,17 @@ from .registry import AgentRecord
 
 
 def create_grant(bank: Bank, customer: dict[str, Any], agent: AgentRecord, level: str, account_id: str,
-                 monthly_cents: int, via: str, jkt: str | None = None, issuer: str | None = None) -> dict[str, Any]:
+                 monthly_cents: int, via: str, jkt: str | None = None, issuer: str | None = None, *,
+                 payees: list[str] | None = None, per_payment_cents: int | None = None,
+                 monthly_count: int | None = None, approve_above_cents: int | None = None,
+                 intent: str | None = None) -> dict[str, Any]:
     """Apply the bank's policy, store the grant and write the consent receipt. Raises ValueError on a bad choice.
 
     `jkt` is the thumbprint of the agent's DPoP key, named during authorisation. The grant is bound to it here, at
-    consent, so no token or API call can claim the grant with another key."""
+    consent, so no token or API call can claim the grant with another key.
+
+    Payees are fixed at consent (docs/valet-profile.md section 3): the customer's choice, or, if none was made, the
+    beneficiaries saved now. A beneficiary added later is not covered until the customer adds it to the mandate."""
     cfg, store = bank.cfg, bank.store
     acct = store.one("SELECT * FROM accounts WHERE id=? AND customer=?", account_id, customer["id"])
     if not acct:
@@ -41,8 +47,22 @@ def create_grant(bank: Bank, customer: dict[str, Any], agent: AgentRecord, level
     if level not in L.LEVELS:
         raise ValueError(f"unknown access level {level!r}")
     monthly = min(int(monthly_cents), cfg.max_monthly_limit)            # the bank's ceiling always wins
-    details = L.build_details(level, acct["id"], monthly)
-    summary = L.plain_summary(level, details, f"{acct['name']} {acct['number']}", cfg.max_grant_days)
+    saved = {r["id"]: r["name"] for r in store.q("SELECT id, name FROM beneficiaries WHERE customer=? ORDER BY name",
+                                                 customer["id"])}
+    chosen = list(saved) if payees is None else [p for p in dict.fromkeys(payees)]
+    if any(p not in saved for p in chosen):
+        raise ValueError("a payee must be one of this customer's saved beneficiaries")
+    if level in L.PAYING and not chosen:
+        raise ValueError("choose at least one payee")
+    count = max(1, min(int(monthly_count or cfg.default_monthly_count), cfg.max_monthly_count))
+    per_payment = int(per_payment_cents) if per_payment_cents else None
+    if per_payment is not None and per_payment <= 0:
+        raise ValueError("the limit for a single payment must be more than zero")
+    above = int(approve_above_cents) if approve_above_cents else None
+    details = L.build_details(level, acct["id"], monthly, payees=chosen, per_payment_cents=per_payment,
+                              monthly_count=count, approve_above_cents=above, intent=L.clean_intent(intent))
+    summary = L.plain_summary(level, details, f"{acct['name']} {acct['number']}", cfg.max_grant_days,
+                              payee_names=[saved[p] for p in chosen] if level in L.PAYING else None)
     consent_hash = digest({"summary": summary, "agent": agent.name, "operator": agent.operator,
                            "client_id": agent.client_id})
     gid, now = random_id("g", 12), time.time()
@@ -86,11 +106,17 @@ def router(bank: Bank) -> APIRouter:
             raise OAuthError("unauthorized_client", "this agent is not verified, so the bank will not connect it")
         try:
             monthly = to_cents(body.get("monthly_limit", "2000.00"))
+            payees = body.get("payees")
             g = create_grant(bank, dict(customer), agent, str(body.get("level", "view_only")),
                              str(body.get("account", "")), monthly, via="bank identity provider",
                              jkt=str(body.get("dpop_jkt") or "") or None,
-                             issuer=bank.native_issuer(str(body.get("issuer") or "") or None))
-        except ValueError as e:
+                             issuer=bank.native_issuer(str(body.get("issuer") or "") or None),
+                             payees=[str(p) for p in payees] if isinstance(payees, list) else None,
+                             per_payment_cents=to_cents(body["per_payment_limit"]) if body.get("per_payment_limit") else None,
+                             monthly_count=int(body["monthly_count"]) if body.get("monthly_count") else None,
+                             approve_above_cents=to_cents(body["approve_above"]) if body.get("approve_above") else None,
+                             intent=body.get("intent"))
+        except (ValueError, TypeError) as e:
             raise OAuthError("invalid_request", str(e)) from e
         return JSONResponse(view(g), status_code=201)
 

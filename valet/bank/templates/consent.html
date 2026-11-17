@@ -11,9 +11,17 @@
 {% for key, lv in levels.items() %}
 <label class="opt"><input type="radio" name="level" value="{{ key }}" {% if key == preselect %}checked{% endif %}><span><b>{{ lv.title }}</b><br><span class="sub">{{ lv.summary }}</span></span></label>
 {% endfor %}
-<label class="f">Monthly limit (Bill payer)<select name="monthly">{% for c, label in monthly_choices %}<option value="{{ c }}" {% if c == 200000 %}selected{% endif %}>{{ label }} a month</option>{% endfor %}</select></label>
 <label class="f">From account<select name="account">{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }} {{ a.number }}</option>{% endfor %}</select></label>
-<div class="never"><b>{{ agent.name }} can never</b><br>Pay someone new without asking you · add beneficiaries · change your limits · see card numbers or your password. Access ends after {{ days }} days.</div>
+<label class="f">What it's for<input type="text" name="intent" maxlength="140" value="{{ intent }}" placeholder="e.g. Pay my monthly utility bills"></label>
+{% if payees is defined %}<input type="hidden" name="payees_shown" value="1">
+<fieldset class="f"><legend>Who it may pay (Approved payer and Bill payer)</legend>
+{% for p in payees %}<label class="opt"><input type="checkbox" name="payees" value="{{ p.id }}" checked><span>{{ p.name }} <span class="sub">••{{ p.account[-4:] }}</span></span></label>{% endfor %}
+<span class="sub">Anyone else, and anyone you save later, needs your approval for each payment.</span></fieldset>{% endif %}
+<label class="f">Monthly limit<select name="monthly">{% for c, label in monthly_choices %}<option value="{{ c }}" {% if c == 200000 %}selected{% endif %}>{{ label }} a month</option>{% endfor %}</select></label>
+{% if per_payment_choices is defined %}<label class="f">Largest single payment<select name="per_payment">{% for c, label in per_payment_choices %}<option value="{{ c }}" {% if c == 100000 %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+<label class="f">Most payments a month<select name="count">{% for c in count_choices %}<option value="{{ c }}" {% if c == 4 %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></label>
+<label class="f">Ask me first for payments over (Bill payer)<select name="approve_above">{% for c, label in approve_above_choices %}<option value="{{ c }}">{% if c == 0 %}Don't ask within my limits{% else %}{{ label }}{% endif %}</option>{% endfor %}</select></label>{% endif %}
+<div class="never"><b>{{ agent.name }} can never</b><br>Pay anyone outside these choices without asking you · add beneficiaries · change your limits · see card numbers or your password. Access ends after {{ days }} days.</div>
 <button class="btn" type="submit" name="decision" value="allow">Confirm with fingerprint</button>
 <button class="btn ghost" type="submit" name="decision" value="deny">Cancel</button>
 <p class="note">You can pause or disconnect {{ agent.name }} at any time under AI agents.</p>

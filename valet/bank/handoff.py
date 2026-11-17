@@ -27,7 +27,6 @@ import jwt
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from ..common.money import rand
 from . import levels as L
 from .context import Bank
 from .grants import create_grant
@@ -135,10 +134,11 @@ def router(bank: Bank) -> APIRouter:
             return error_page(request, str(e))
         level = t.get("requested_level") if t.get("requested_level") in L.LEVELS else "view_only"
         accounts = store.q("SELECT * FROM accounts WHERE customer=?", cus["id"])
+        payees = store.q("SELECT id, name, account FROM beneficiaries WHERE customer=? ORDER BY name", cus["id"])
         return render(request, "consent.html", bank, customer=cus, agent=agent, client_id=agent.client_id,
                       action="/handoff/decision", hidden={"ticket": ticket}, preselect=level, levels=L.LEVELS,
-                      accounts=accounts, days=cfg.max_grant_days,
-                      monthly_choices=[(c, rand(c)) for c in L.MONTHLY_CHOICES if c <= cfg.max_monthly_limit])
+                      accounts=accounts, payees=payees, intent=L.clean_intent(t.get("intent")) or "",
+                      days=cfg.max_grant_days, **L.consent_options(cfg))
 
     @r.post("/decision", response_class=HTMLResponse)
     async def decision(request: Request):
@@ -166,7 +166,8 @@ def router(bank: Bank) -> APIRouter:
                 g = create_grant(bank, cus, agent, str(form.get("level", "view_only")), str(form.get("account", "")),
                                  int(form.get("monthly") or 2_000_00), via="bank identity provider (consent hand-off)",
                                  jkt=str(t.get("dpop_jkt") or "") or None,
-                                 issuer=bank.native_issuer(str(t.get("token_issuer") or "") or None))
+                                 issuer=bank.native_issuer(str(t.get("token_issuer") or "") or None),
+                                 **L.consent_choices(form))
             except ValueError as e:
                 return error_page(request, f"That choice isn't possible: {e}.")
             result |= {"decision": "allow", "grant_id": g["id"]}

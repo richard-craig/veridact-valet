@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse, Response
 from ..common.crypto import digest, random_id
 from ..common.money import rand, to_cents, to_str
 from . import levels as L
+from . import mandate
 from .authz import _payment_summary, payment_detail
 from .payments import HELD
 from .registry import RegistryUnavailable
@@ -172,14 +173,11 @@ def router(bank: Bank) -> APIRouter:
                                     action=f"mcp:{tool}", outcome=outcome, basis="mcp_gateway",
                                     reason_codes=list(codes), **kw)
 
-    def remaining(grant: dict[str, Any]) -> int:
-        """The month's limit, less what is spent, what is held for the bank to confirm, and what waits for the customer."""
-        limit = L.monthly_limit(grant["details"]) or 0
-        waiting = 0
-        for a in store.q("SELECT detail FROM approvals WHERE grant_id=? AND status IN ('pending','approved') "
-                         "AND consumed=0 AND expires>?", grant["id"], time.time()):
-            waiting += to_cents(json.loads(a["detail"])["amount"]["amount"])
-        return limit - store.spent(grant["id"]) - payments.reserved(grant["id"]) - waiting
+    def waiting(grant: dict[str, Any]) -> tuple[int, int]:
+        """Payments already asked for that wait for the customer: they count against the month's limit and count."""
+        rows = store.q("SELECT detail FROM approvals WHERE grant_id=? AND status IN ('pending','approved') "
+                       "AND consumed=0 AND expires>?", grant["id"], time.time())
+        return sum(to_cents(json.loads(a["detail"])["amount"]["amount"]) for a in rows), len(rows)
 
     def call_tool(name: str, args: dict[str, Any], grant: dict[str, Any], tier: str) -> dict[str, Any]:
         t = TOOLS.get(name)
@@ -203,7 +201,9 @@ def router(bank: Bank) -> APIRouter:
                                       "description": x["description"], "amount": to_str(abs(x["amount"])),
                                       "direction": "in" if x["amount"] > 0 else "out"} for x in rows]}
         if name == "list_payees":
-            rows = store.q("SELECT id,name,account FROM beneficiaries WHERE customer=? ORDER BY name", grant["customer"])
+            named = L.payees(grant["details"])
+            rows = [x for x in store.q("SELECT id,name,account FROM beneficiaries WHERE customer=? ORDER BY name",
+                                       grant["customer"]) if named is None or x["id"] in named]
             return {"payees": [{"payee_id": x["id"], "name": x["name"], "account": mask(x["account"])} for x in rows]}
         if name == "pay_existing_payee":
             return request_payment(grant, args, tier)
@@ -254,16 +254,20 @@ def router(bank: Bank) -> APIRouter:
                                 grant["id"], now)["n"]
             if payments.by_key(grant["id"], key):
                 refusal = ("IDEMPOTENCY_KEY_REUSED", "That idempotency_key was used for another payment. Use a new one.")
-            elif cents > remaining(grant):
-                refusal = ("MONTHLY_LIMIT_EXCEEDED",
-                           f"{rand(cents)} would go over this month's limit of {rand(L.monthly_limit(grant['details']) or 0)} "
-                           f"(including payments already waiting for approval).")
+            elif (check := mandate.check_payment(store, grant, payee["account"], cents, *waiting(grant))).reason \
+                    in mandate.MCP_CODES:
+                # The same rules, in the same order, as the direct API (mandate.py). Here they are refusals: every
+                # gateway payment is approved anyway, and an approval never widens the mandate.
+                waits = " (counting payments already waiting for approval)" \
+                    if check.reason in ("over_monthly_count", "over_monthly_limit") else ""
+                refusal = (mandate.MCP_CODES[check.reason], check.text[0].upper() + check.text[1:] + waits + ".")
             elif pending >= cfg.max_pending_approvals:
                 refusal = ("TOO_MANY_PENDING", "Too many payments are already waiting for the customer.")
             else:
                 intent = payments.create(grant, key, digest(detail), detail, cents, "approval_required", "approval",
                                          reason=why, expires=now + max(cfg.approval_ttl, 600), approval=aid,
-                                         channel="mcp_gateway")
+                                         channel="mcp_gateway", reason_code=check.reason or "bearer_tier",
+                                         instruction=reason)
                 store.x("INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,0,0)", aid, grant["id"], grant["client_id"],
                         json.dumps(detail), digest(detail), f"{grant_name(grant)} says: {reason}"[:120], why, "pending",
                         now, now + max(cfg.approval_ttl, 600))
@@ -271,7 +275,8 @@ def router(bank: Bank) -> APIRouter:
         if refusal:
             return declined(*refusal)
         receipt(grant, "pay_existing_payee", "held", ["CUSTOMER_APPROVAL_REQUIRED"], tier=tier, approval=aid,
-                payment_intent=intent["id"], agent_supplied_instruction=reason, detail=_payment_summary(detail))
+                payment_intent=intent["id"], agent_supplied_instruction=reason, detail=_payment_summary(detail),
+                reason_code=intent["reason_code"])
         return out
 
     def grant_name(grant: dict[str, Any]) -> str:

@@ -122,13 +122,18 @@ class ValetClient:
                                details, time.time() + body.get("expires_in", 300) - 15)
 
     # ------------------------------------------------------------ connect
-    async def start_connect(self, level: str = "bill_payer", account_hint: str | None = None) -> tuple[str, PendingConnect]:
-        """Push the request (PAR) and return the URL to send the customer to."""
+    async def start_connect(self, level: str = "bill_payer", account_hint: str | None = None,
+                            intent: str | None = None) -> tuple[str, PendingConnect]:
+        """Push the request (PAR) and return the URL to send the customer to. `intent` is the purpose the agent
+        states (up to 140 characters); the customer sees it on the consent screen and can change it."""
         verifier = b64u(secrets.token_bytes(32))
         challenge = b64u(hashlib.sha256(verifier.encode()).digest())
         details = [{"type": "valet_accounts", "actions": ["read_balances", "read_transactions"]}]
-        if level == "bill_payer":
-            details.append({"type": "valet_payments", "actions": ["pay_existing_beneficiary"]})
+        if level in ("approved_payer", "bill_payer"):
+            details.append({"type": "valet_payments", "actions": ["pay_existing_beneficiary"], "approval": level})
+        if intent:
+            for d in details:
+                d["intent"] = intent
         state = secrets.token_urlsafe(16)
         # dpop_jkt (RFC 9449 section 10) names this agent's key now, so the bank binds the customer's consent to it.
         req = {"response_type": "code", "redirect_uri": self.redirect_uri, "state": state,
@@ -191,13 +196,19 @@ class ValetClient:
 
     # ------------------------------------------------------------ payments and approvals
     async def pay(self, from_account: str, to_name: str, to_account: str, amount: str, reference: str = "",
-                  note: str = "", idempotency_key: str | None = None) -> dict[str, Any]:
+                  note: str = "", idempotency_key: str | None = None, instruction: str | None = None) -> dict[str, Any]:
         """Pay inside the grant, or start an approval if the bank asks for one.
+
+        `instruction` is what the agent was asked to do, in its own words. The bank records it on the receipt, labelled
+        as agent-supplied. `reason_code` in an approval_pending result says which mandate rule the payment fell outside
+        (docs/valet-profile.md section 3).
 
         Outcomes: "paid"; "approval_pending" (the customer must approve in the bank app); "pending" (the bank has not
         confirmed yet: call pay() again with the same idempotency_key, returned here, never with a new one)."""
         payment = {"from_account": from_account, "to": {"name": to_name, "account": to_account}, "amount": amount,
                    "reference": reference}
+        if instruction:
+            payment["instruction"] = instruction
         key = idempotency_key or new_idempotency_key()
         try:
             return _paid(await self.call("POST", "/api/payments", payment, idempotency_key=key), key)
@@ -211,6 +222,7 @@ class ValetClient:
             self.approvals[body["auth_req_id"]] = payment
             self.keys[body["auth_req_id"]] = key
             return {"outcome": "approval_pending", "auth_req_id": body["auth_req_id"], "reason": e.body.get("error_description"),
+                    "reason_code": e.body.get("reason"),
                     "idempotency_key": key, "payment_intent_id": e.body.get("payment_intent_id"),
                     "expires_in": body["expires_in"], "interval": body["interval"]}
 

@@ -45,7 +45,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS payment_intents (id TEXT PRIMARY KEY, grant_id TEXT, client_id TEXT, idem_key TEXT,
     request_digest TEXT, detail TEXT, amount INTEGER, month TEXT, status TEXT, basis TEXT, approval TEXT, reason TEXT,
     bank_payment_id TEXT, outcome TEXT, created REAL, updated REAL, expires REAL, channel TEXT DEFAULT 'api',
-    mandate_version INTEGER DEFAULT 1, escalated REAL);
+    mandate_version INTEGER DEFAULT 1, escalated REAL, reason_code TEXT, instruction TEXT);
 DROP INDEX IF EXISTS payment_intents_idem;
 CREATE UNIQUE INDEX IF NOT EXISTS payment_intents_grant_key ON payment_intents (grant_id, idem_key);
 CREATE INDEX IF NOT EXISTS payment_intents_held ON payment_intents (grant_id, month, status);
@@ -70,7 +70,7 @@ class Payments:
         store.db.executescript(SCHEMA)
         cols = {c["name"] for c in store.db.execute("PRAGMA table_info(payment_intents)")}
         for col, ddl in (("channel", "TEXT DEFAULT 'api'"), ("mandate_version", "INTEGER DEFAULT 1"),
-                         ("escalated", "REAL")):                 # databases from earlier versions
+                         ("escalated", "REAL"), ("reason_code", "TEXT"), ("instruction", "TEXT")):                 # databases from earlier versions
             if col not in cols:
                 store.db.execute(f"ALTER TABLE payment_intents ADD COLUMN {col} {ddl}")
 
@@ -106,13 +106,17 @@ class Payments:
     # ------------------------------------------------------------- writes (call inside store.tx())
     def create(self, grant: dict[str, Any], key: str, request_digest: str, detail: dict[str, Any], cents: int,
                status: str, basis: str, reason: str | None = None, expires: float | None = None,
-               approval: str | None = None, channel: str = "api") -> dict[str, Any]:
+               approval: str | None = None, channel: str = "api", reason_code: str | None = None,
+               instruction: str | None = None) -> dict[str, Any]:
+        """`reason_code` is the profile reason a payment was held for approval (mandate.REASONS); `instruction` is
+        the agent's own account of what it was asked to do, kept as agent-supplied and outside the receipt chain."""
         iid, now = random_id("pi", 12), time.time()
         self.store.x("INSERT INTO payment_intents (id, grant_id, client_id, idem_key, request_digest, detail, amount, "
-                     "month, status, basis, approval, reason, created, updated, expires, channel, mandate_version) "
-                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", iid, grant["id"], grant["client_id"], key,
-                     request_digest, json.dumps(detail), cents, month_key(), status, basis, approval, reason, now, now,
-                     expires, channel, grant.get("version") or 1)
+                     "month, status, basis, approval, reason, created, updated, expires, channel, mandate_version, "
+                     "reason_code, instruction) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", iid, grant["id"],
+                     grant["client_id"], key, request_digest, json.dumps(detail), cents, month_key(), status, basis,
+                     approval, reason, now, now, expires, channel, grant.get("version") or 1, reason_code,
+                     instruction or None)
         return self.get(iid)
 
     def link_approval(self, grant_id: str, request_digest: str, approval_id: str) -> str | None:
@@ -313,9 +317,14 @@ class Payments:
             "detail": {"to": d["to"]["name"], "account": d["to"]["account"], "amount": d["amount"]["amount"],
                        "currency": d["amount"]["currency"], "reference": d.get("reference", "")},
             "payment_intent": intent["id"], "idempotency_key": intent["idem_key"], "channel": intent.get("channel") or "api",
-            "intent_evidence": EVIDENCE.get(intent["basis"], "standing_mandate")}
-        if intent["basis"] == "approval":
+            "intent_evidence": ("agent_reported" if intent["basis"] == "grant" and intent.get("instruction") else
+                                EVIDENCE.get(intent["basis"], "standing_mandate"))}
+        if intent["basis"] == "approval" or intent.get("approval"):
             fields["approval"] = intent["approval"]
+        if intent.get("reason_code"):
+            fields["reason_code"] = intent["reason_code"]          # why it needed the customer's approval
+        if intent.get("instruction"):
+            fields["agent_supplied_instruction"] = intent["instruction"]
         return self.receipts.append(grant_id=grant["id"], agent=grant["client_id"], customer=grant["customer"],
                                     action="payment", outcome=outcome,
                                     basis=intent["basis"] if outcome == "allowed" else ("refused" if outcome == "failed" else intent["basis"]),

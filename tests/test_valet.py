@@ -371,7 +371,7 @@ def test_payment_evidence_page_shows_who_asked_what_was_allowed_whose_decision_a
         assert "Paid City Power" in page and "R1,250.00" in page
         assert "Kaya" in page and "Verified" in page                                     # 1. who asked
         assert h.bank.store.grant(gid)["jkt"][:16] in page
-        assert "Bill payer: pay existing beneficiaries" in page                          # 2. what was allowed
+        assert "Bill payer: pay Satellite TV, Sunrise Primary School" in page             # 2. what was allowed
         assert "You approved this exact payment" in page and "after signing in again" in page   # 3. whose decision
         assert "not a saved beneficiary" in page and "Monthly electricity" in page
         assert paid["bank_payment_id"] in page and held["idempotency_key"] in page       # 4. what the bank did

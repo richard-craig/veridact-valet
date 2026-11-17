@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from ..common.crypto import b64u, digest, random_id, sha256_b64u
 from ..common.dpop import DPoPError, check_proof
-from ..common.money import rand, to_cents
+from ..common.money import to_cents
 from . import levels as L
 from .context import Bank, OAuthError
 from .grants import create_grant
@@ -118,14 +118,16 @@ def router(bank: Bank) -> APIRouter:
             return step_up(here)
         rec = bank.registry.lookup(client_id)
         accounts = store.q("SELECT * FROM accounts WHERE customer=?", cus["id"])
+        payees = store.q("SELECT id, name, account FROM beneficiaries WHERE customer=? ORDER BY name", cus["id"])
         return render(request, "consent.html", bank, customer=cus, agent=rec, client_id=client_id, request_uri=request_uri,
                       preselect=L.requested_level(params["details"]), levels=L.LEVELS, accounts=accounts,
-                      monthly_choices=[(c, rand(c)) for c in L.MONTHLY_CHOICES if c <= cfg.max_monthly_limit],
+                      payees=payees, intent=L.requested_intent(params["details"]) or "", **L.consent_options(cfg),
                       days=cfg.max_grant_days, csrf=csrf_token(bank, cus["id"]))
 
     @r.post("/authorize/decision")
     async def decision(request: Request):
-        form = _form(await request.form())
+        raw = await request.form()
+        form = _form(raw)
         cus = current_customer(bank, request)
         if not cus or not csrf_ok(bank, cus["id"], form.get("csrf", "")):
             return HTMLResponse("<h1>Session expired</h1>", status_code=403)
@@ -145,7 +147,7 @@ def router(bank: Bank) -> APIRouter:
         try:
             grant = create_grant(bank, cus, rec, form.get("level", "view_only"), form.get("account", ""),
                                  int(form.get("monthly") or 2_000_00), via="Valet consent screen",
-                                 jkt=params["dpop_jkt"], issuer=cfg.issuer)
+                                 jkt=params["dpop_jkt"], issuer=cfg.issuer, **L.consent_choices(raw))
         except ValueError:
             return HTMLResponse("<h1>Invalid choice</h1>", status_code=400)
         gid, now = grant["id"], time.time()

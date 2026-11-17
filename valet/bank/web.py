@@ -193,6 +193,13 @@ def router(bank) -> APIRouter:
             return None, RedirectResponse("/login?next=" + request.url.path, 303)
         return cus, None
 
+    def payee_names(g: dict[str, Any]) -> list[str] | None:
+        ids = L.payees(g["details"])
+        if not ids:
+            return None
+        names = {r["id"]: r["name"] for r in store.q("SELECT id, name FROM beneficiaries WHERE customer=?", g["customer"])}
+        return [names.get(i, i) for i in ids]
+
     def owned_grant(cus, gid: str) -> dict[str, Any] | None:
         g = store.grant(gid)
         return g if g and g["customer"] == cus["id"] else None
@@ -288,7 +295,8 @@ def router(bank) -> APIRouter:
         if not g:
             return HTMLResponse("Not found", status_code=404)
         acct = store.one("SELECT * FROM accounts WHERE id=?", L.find(g["details"], "valet_accounts")["accounts"][0])
-        summary = L.plain_summary(g["level"], g["details"], f"{acct['name']} {acct['number']}", bank.cfg.max_grant_days)
+        summary = L.plain_summary(g["level"], g["details"], f"{acct['name']} {acct['number']}", bank.cfg.max_grant_days,
+                                  payee_names=payee_names(g))
         # A line about a payment opens its evidence page: every record the bank holds for that one payment.
         held_for = {i["approval"]: i["id"] for i in bank.payments.for_grant(gid) if i["approval"]}
         items = [{**describe(x), "time": x["time"][11:16], "date": x["time"][:10], "hash": x["hash"][:19],
@@ -361,7 +369,8 @@ def router(bank) -> APIRouter:
                         if intent["channel"] == "mcp_gateway" else
                         "Directly, with every request signed by the agent's own key."),
             "key": (g["jkt"] or "")[:16], "connected_at": when(connect["time"]) if connect else None,
-            "mandate": L.plain_summary(g["level"], g["details"], f"{shared['name']} {shared['number']}", bank.cfg.max_grant_days),
+            "mandate": L.plain_summary(g["level"], g["details"], f"{shared['name']} {shared['number']}", bank.cfg.max_grant_days,
+                                       payee_names=payee_names(g)),
             "consent_hash": (g["consent_hash"] or "")[:26],
             "decision": decision, "why": ap["reason"] if ap else intent["reason"], "note": ap["message"] if ap else None,
             "instruction": asked.get("agent_supplied_instruction") if asked else None,

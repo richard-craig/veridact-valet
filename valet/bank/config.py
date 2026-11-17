@@ -38,6 +38,8 @@ class BankConfig:
     policy_version: str = field(default_factory=lambda: os.environ.get("VALET_POLICY_VERSION", ""))
     # Policy ceilings the bank allows agents (cents)
     max_monthly_limit: int = 5_000_00
+    max_monthly_count: int = 20              # most payments a month a mandate may allow
+    default_monthly_count: int = 10          # used when the customer does not choose one
     max_grant_days: int = 90
     # Agent trust from the registry is cached this long: withdrawing trust there takes up to this long. The bank's own
     # denylist (agents, operators, keys) has no cache: it is read from the database on every request.

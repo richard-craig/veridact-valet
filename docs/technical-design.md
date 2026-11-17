@@ -153,7 +153,7 @@ An exception uses a third type, valid for one action only:
  "amount": {"amount": "1250.00", "currency": "ZAR"}, "reference": "Electricity Oct"}
 ```
 
-**Access levels are templates over these types:** *View only* is `valet_accounts` alone; Approved payer adds valet\_payments, with every payment sent to the customer for approval in the bank app (the pilot default). *Bill payer* adds `valet_payments` with `pay_existing_beneficiary`, a per-payment cap, a maximum number of payments a month, and a monthly limit. The agent may ask for a level; the customer chooses on the consent screen, and the grant records what the customer chose, not what the agent asked for.
+**Access levels are templates over these types:** *View only* is `valet_accounts` alone; *Approved payer* adds `valet_payments` with `approval: approved_payer`, so every payment is sent to the customer for approval in the bank app (the pilot default). *Bill payer* adds `valet_payments` with named payees, a per-payment cap, a maximum number of payments a month, a monthly limit and, optionally, an amount above which the customer approves. The agent may ask for a level and propose an `intent`; the customer chooses on the consent screen, and the grant records what the customer chose, not what the agent asked for. The full rules, reasons and receipt format are in the [Valet profile](valet-profile.md). **Built in version 0.8** (§20).
 
 ### 3.1 Target data model: versioned mandates (proposed)
 
@@ -171,7 +171,7 @@ The PoC's grant is one row whose terms and status change in place. The target mo
 | Approval | As today, plus mandate\_id and version | Single use; counts towards the month's total and count |
 | Receipt | As today, plus mandate\_id, version, idempotency key, triggering instruction (agent-supplied, labelled), policy result, risk score | One hash chain per mandate |
 
-The payment detail gains named payees, a per-payment cap, a payment count and an approval mode:
+The payment detail gains named payees, a per-payment cap, a payment count and an approval mode (**built in 0.8** on the single-version grant; the version split above is still deferred):
 
 ```json
 {
@@ -251,7 +251,7 @@ FAPI's own concern is that a lost response strands an honest client. The retry w
 | 4 | Not on the bank's denylist (client, operator or key, read from the database); still trusted in the `AgentRegistry`; for payments, the registry is reachable (§9.1) | 403 `agent_denied`; 403 `agent_untrusted`; 503 `registry_unavailable` |
 | 5 | Grant status is `active` (live lookup) and not expired | 403 `grant_paused`, `grant_revoked` or `grant_expired` |
 | 6 | The action is in `authorization_details` (type, action, account) | 403 `insufficient_authorization` |
-| 7 | Payments: an `Idempotency-Key` is present; the payee is an existing beneficiary; the month’s total, counting what is spent and what is held for unconfirmed payments, stays within the limit. Finding or creating the payment intent, the check and the hold happen in one locked step, so two parallel payments cannot both pass a limit only one fits under. (Per-payment cap and payment count: §3.1, proposed) | 400 `invalid_request` without a key; 422 `idempotency_key_reused`; 403 `approval_required`, with the exact `valet_payment_once` the agent should request |
+| 7 | Payments: an `Idempotency-Key` is present; then the mandate check (`valet/bank/mandate.py`, in order): the payee is a saved beneficiary and one of the mandate's payees; the amount is within the per-payment cap; the month's payment count and total, counting what is held for unconfirmed payments, stay within the limits; the approval mode and threshold do not ask for the customer. Finding or creating the payment intent, the check and the hold happen in one locked step, so two parallel payments cannot both pass a limit only one fits under | 400 `invalid_request` without a key; 422 `idempotency_key_reused`; 403 `approval_required`, with the exact `valet_payment_once` the agent should request and the `reason` ([profile](valet-profile.md) §3) |
 | 8 | Check the denylist again, then initiate the instruction through the bank's payments API with the intent id, record its answer, write a receipt (§5.1). Valet does not execute | 200 `paid` with the receipt hash; 422 if the bank declines or the intent was cancelled; 202 `pending` if the bank has not answered |
 
 Every outcome, allowed, refused, declined by the bank or unknown, writes a receipt (§8). Step 5 is a database read on every call: that is what makes pause and revoke immediate, without waiting for tokens to expire. The grant store is therefore on the critical path: if it cannot be reached, calls fail closed, so it needs an availability target at least as high as the banking API's.
@@ -259,7 +259,8 @@ Every outcome, allowed, refused, declined by the bank or unknown, writes a recei
 ```json
 HTTP/1.1 403 Forbidden
 {"error": "approval_required",
- "error_description": "City Power is not an existing beneficiary",
+ "error_description": "this payee is not a saved beneficiary on this account",
+ "reason": "new_recipient",
  "payment_intent_id": "pi_8Qm2…",
  "authorization_details": [{"type": "valet_payment_once", "from": "acc_4821",
    "to": {"name": "City Power", "account": "30087712"},
@@ -400,7 +401,7 @@ Access tokens last 5 minutes, but that is not the safety mechanism: the live gra
 - **Every party holds a copy.** Each API response carries its signed receipt, so the agent operator keeps its own copy and the customer sees it in the app. A dispute can then be examined from the same record without trusting one party's database.
 - **Personal data stays outside the chain.** Records hold pseudonymous ids and hashes. Names, account numbers and payee details sit in a separate table the bank can erase under POPIA without breaking the chain.
 - **Key rotation.** Each receipt names its signing key (kid), and retired public keys stay in /jwks, so old chains still verify.
-- **Also recorded.** The triggering instruction (agent-supplied, labelled as such), and the policy result and any risk score, stored separately. (The mandate version and the policy in force are on every receipt from version 0.7.)
+- **Also recorded.** The policy result and any risk score, stored separately. (The mandate version and the policy in force are on every receipt from version 0.7. The mandate's purpose, the triggering instruction, the reason code and the approval id are on every receipt from version 0.8, with the purpose and instruction kept outside the chain as salted hashes: [profile](valet-profile.md) §6.)
 
 ### 8.1 What a receipt proves, and what it does not
 
@@ -409,7 +410,7 @@ Access tokens last 5 minutes, but that is not the safety mechanism: the live gra
 | `intent_evidence` | What the record shows | What it leaves open | Status |
 | --- | --- | --- | --- |
 | `standing_mandate` | The payment was inside the authority the customer delegated | Whether the agent followed the customer's actual instruction | Built |
-| `agent_reported` | As above, plus the instruction the agent says it acted on, labelled as the agent's words | The agent's account is not independently trustworthy | Not emitted yet. The MCP gateway records the agent's stated reason, but every payment there is also customer-confirmed; designed for the direct API |
+| `agent_reported` | As above, plus the instruction the agent says it acted on, labelled as the agent's words | The agent's account is not independently trustworthy | Built (0.8): emitted for a payment inside the standing mandate when the agent sends `instruction`. The instruction is kept outside the chain as a salted hash (profile §6) |
 | `customer_confirmed` | The customer approved this exact payment in the bank's own channel | Whether the approval was informed and free of deception | Built |
 | `customer_authenticated` | As above, plus the authentication the bank performed for that approval (`acr`, `auth_time`) | Device compromise, coercion | Designed: the PoC requires a recent sign-in but does not record it on the approval |
 
@@ -539,7 +540,7 @@ DPoP: eyJ0eXAiOiJkcG9wK2p3dCIs...
 Idempotency-Key: water-oct-2026
 
 {"from_account": "acc_4821", "to": {"name": "Water & Sanitation", "account": "40021187"},
- "amount": "640.00", "reference": "Water Oct"}
+ "amount": "640.00", "reference": "Water Oct", "instruction": "Pay the October water bill"}
 
 HTTP/1.1 200 OK
 {"status": "paid", "payment_intent_id": "pi_3hV9...", "bank_payment_id": "bp_Tq7c...",
@@ -558,7 +559,7 @@ HTTP/1.1 200 OK
 | `grant_paused` | 403 | The customer paused the agent | Tell the customer; try again after they resume |
 | `grant_revoked`, `grant_expired` | 403 | The permission has ended | Start a new connect |
 | `insufficient_authorization` | 403 | Outside the grant, or adding a beneficiary | Ask the customer to change access in the bank app |
-| `approval_required` | 403 | The bank offers this exact action for approval; the body carries `authorization_details` | Send it unchanged to `/bc-authorize` |
+| `approval_required` | 403 | The bank offers this exact action for approval; the body carries `authorization_details`, the `payment_intent_id` and the `reason` (`new_recipient`, `payee_not_on_mandate`, `over_per_payment`, `over_monthly_count`, `over_monthly_limit`, `approved_payer`, `over_approval_threshold`) | Send it unchanged to `/bc-authorize`; tell the customer why, from `reason` |
 | `approval_invalid` | 403 | Single-use token already used, expired, for a different action, or sent under another payment request's key | Ask for a new approval |
 | `invalid_request` | 400 | No `Idempotency-Key`, or a malformed payment | Fix the request |
 | `idempotency_key_reused` | 422 | The key was already used for a different payment | Use a new key for a new payment |
@@ -667,7 +668,7 @@ The extension uses Keycloak's internal authenticator and protocol-mapper SPIs, a
 ```bash
 pip install -r requirements.txt
 python demo.py          # scripted end-to-end run: 13 steps, 24 checks
-python -m pytest -q     # 125 behaviour tests, including payment safety, stopping payments, the emergency stop and evidence packs, both identity-provider modes and the consent hand-off
+python -m pytest -q     # 145 behaviour tests, including the profile conformance suite (tests/test_profile.py), plus payment safety, stopping payments, the emergency stop and evidence packs, both identity-provider modes and the consent hand-off
 python run.py           # clickable: Kaya http://localhost:8001, Marula Bank http://localhost:8000 (thandi / demo)
 
 docker compose up --build        # the same clickable demo in containers
@@ -857,3 +858,19 @@ Version 0.7 (17 November 2026) closes the gaps found by mapping Valet against a 
 | No way to preserve and hand over evidence | Signed evidence packs per grant or per agent, verifiable offline with the bank's published key (§8.3) | Built |
 | Versioned mandates | **Still deferred**, for the reason in §16: a mandate cannot be edited yet, so version 1 is exact. The receipt names the mandate version and the policy version, which is what an evidence set needs today; real versions arrive with mandate editing (§3.1) | Deferred, unchanged |
 
+## 20. Changes in version 0.8
+
+Version 0.8 (17 November 2026) builds the [Valet profile](valet-profile.md) (`valet-profile/0.8`): the shared permission standard is now one document, and every rule in it is in the code and covered by a conformance test.
+
+| Gap | Change | Status |
+| --- | --- | --- |
+| Approved payer was a pilot default only on paper | `approved_payer` level: every payment is offered to the customer for approval (§3) | Built |
+| Payees were "any saved beneficiary", including ones saved later | Named payees, ticked on the consent screen; the default is the beneficiaries saved at consent; a later one is not covered (§3.1) | Built |
+| Only a monthly limit | Per-payment cap, monthly payment count (held and approved payments count), optional approval threshold; bank ceilings `max_monthly_count` and `default_monthly_count` (§3.1) | Built |
+| Two front doors, two rule sets | One mandate check (`valet/bank/mandate.py`) used by the direct API and the MCP gateway, in one order, with one set of reasons; the gateway maps them to its codes and lists only the mandate's payees (§14) | Built |
+| `approval_required` said why only in prose | `reason` code on the response, the payment intent and the receipts (§10) | Built |
+| Receipts lacked the purpose and the agent's instruction | `intent` on mandates and receipts; `instruction` on payment requests, recorded as agent-supplied (`intent_evidence: agent_reported`); both kept outside the chain as salted hashes in an erasable table (§8, §8.1) | Built |
+| Payee names and account numbers in the chain | Still in `detail`; moving them to the erasable table is next (§8) | Specified |
+| Standards route | Assessed against the OAuth working group's current agent drafts; recommended route in profile §8 | Documented |
+
+**Verified on 17 November 2026 (version 0.8):** 24 of 24 demo checks and 145 of 145 tests passed on Python 3.13. The Keycloak preflight was not re-run.

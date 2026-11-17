@@ -17,8 +17,9 @@ from fastapi.responses import JSONResponse
 
 from ..common.crypto import digest
 from ..common.dpop import DPoPError, check_proof
-from ..common.money import rand, to_cents, to_str
+from ..common.money import to_cents, to_str
 from . import levels as L
+from . import mandate
 from .authz import _payment_summary, payment_detail
 from .context import Bank, OAuthError
 from .registry import RegistryUnavailable
@@ -181,7 +182,7 @@ def router(bank: Bank) -> APIRouter:
         store.x("INSERT OR REPLACE INTO hints VALUES (?,?,?,?)", c.grant["id"], intent["request_digest"],
                 json.dumps({**intent["detail"], "_reason": intent["reason"]}), time.time() + bank.cfg.approval_ttl)
         raise OAuthError("approval_required", intent["reason"], 403, authorization_details=[intent["detail"]],
-                         payment_intent_id=intent["id"])
+                         payment_intent_id=intent["id"], reason=intent.get("reason_code"))
 
     @r.post("/payments")
     async def pay(request: Request, c: Caller = Depends(payer)):
@@ -196,6 +197,9 @@ def router(bank: Bank) -> APIRouter:
             raise OAuthError("invalid_request", "an Idempotency-Key header of 8 to 64 characters is required: send the "
                                                 "same key when you retry a payment, and a new key for a new payment")
         reference = str(body.get("reference", ""))[:40]
+        # The agent's own account of what it was asked to do: recorded as agent-supplied, never trusted, kept outside
+        # the receipt chain (receipts.py).
+        instruction = " ".join(str(body.get("instruction", "")).split())[:200] or None
         detail = payment_detail(frm, to_name, to_acct, cents, reference)
         summary = _payment_summary(detail)
 
@@ -208,21 +212,19 @@ def router(bank: Bank) -> APIRouter:
             raise OAuthError("insufficient_authorization", "this access level cannot make payments", 403)
 
         d = digest(detail)
-        limit = L.monthly_limit(c.details) or 0
-        # One locked step: find or create the intent, check the limit against what is spent and held, and hold the amount.
+        # One locked step: find or create the intent, check it against the mandate (payee, cap, count, limit counting
+        # holds, approval mode; mandate.py), and hold the amount.
         with store.tx():
             intent, new = payments.by_key(c.grant["id"], key), False
             if intent is None:
                 new = True
-                existing = store.one("SELECT 1 FROM beneficiaries WHERE customer=? AND account=?", c.grant["customer"], to_acct)
-                used = store.spent(c.grant["id"]) + payments.reserved(c.grant["id"])
-                if existing and used + cents <= limit:
-                    intent = payments.create(c.grant, key, d, detail, cents, "reserved", "grant")
+                check = mandate.check_payment(store, c.grant, to_acct, cents)
+                if check.covered:
+                    intent = payments.create(c.grant, key, d, detail, cents, "reserved", "grant", instruction=instruction)
                 else:
-                    reason = (f"{to_name} is not a saved beneficiary on this account" if not existing else
-                              f"{rand(cents)} would take this month to {rand(used + cents)}, over the {rand(limit)} limit")
-                    intent = payments.create(c.grant, key, d, detail, cents, "approval_required", "grant", reason=reason,
-                                             expires=time.time() + bank.cfg.approval_ttl)
+                    intent = payments.create(c.grant, key, d, detail, cents, "approval_required", "grant",
+                                             reason=check.text, expires=time.time() + bank.cfg.approval_ttl,
+                                             reason_code=check.reason, instruction=instruction)
         if intent["request_digest"] != d:
             receipt(c, "payment", "refused", "refused", reason="idempotency key reused for a different payment", detail=summary)
             raise OAuthError("idempotency_key_reused", "this Idempotency-Key was used for a different payment; "
@@ -230,7 +232,8 @@ def router(bank: Bank) -> APIRouter:
         if intent["status"] == "approval_required":
             if new:
                 receipt(c, "payment", "held", "approval_required", reason=intent["reason"], detail=summary,
-                        payment_intent=intent["id"], idempotency_key=key)
+                        payment_intent=intent["id"], idempotency_key=key, reason_code=intent["reason_code"],
+                        agent_supplied_instruction=intent["instruction"])
             else:
                 rearm(intent)
             offer(c, intent)

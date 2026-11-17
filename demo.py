@@ -184,7 +184,8 @@ async def main() -> int:
     chain = h.bank.receipts.verify_chain()
     say("BANK", f"{chain['count']} receipts, chain intact: {chain['ok']}")
     check("Receipt chain verifies", chain["ok"])
-    row = h.bank.store.one("SELECT seq, record FROM receipts WHERE record LIKE '%Water & Sanitation%' AND record LIKE '%allowed%'")
+    row = h.bank.store.one("SELECT seq, record FROM receipts WHERE record LIKE ? AND record LIKE '%Water & Sanitation%' "
+                           "AND record LIKE '%640.00%' AND record LIKE '%allowed%'", '%"action": "payment"%')
     h.bank.store.x("UPDATE receipts SET record=? WHERE seq=?", row["record"].replace("640.00", "64.00"), row["seq"])
     broken = h.bank.receipts.verify_chain()
     say("ATTACK", f"changes the water payment in receipt {row['seq']} from R640 to R64 -> {broken['why']} at {broken.get('broken_at')}")
