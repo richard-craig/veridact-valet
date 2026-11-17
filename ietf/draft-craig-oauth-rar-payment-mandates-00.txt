@@ -1,0 +1,1120 @@
+
+
+
+
+Web Authorization Protocol                                      R. Craig
+Internet-Draft                                               Independent
+Intended status: Standards Track                        17 November 2026
+Expires: 21 May 2027
+
+
+Rich Authorization Requests Profile for Agent Payment Mandates, Approval
+                          Reasons and Receipts
+               draft-craig-oauth-rar-payment-mandates-00
+
+Abstract
+
+   Software agents, including those driven by large language models,
+   increasingly initiate payments on behalf of people.  OAuth 2.0 Rich
+   Authorization Requests (RFC 9396) can carry what such an agent may
+   do, but there is no common way to express the limits that banks and
+   their customers need, to tell an agent why a payment needs the
+   customer's approval, or to keep an independent record of what was
+   decided.
+
+   This document defines two authorization details types for payment
+   mandates (a standing mandate with named payees, per-payment and per-
+   period limits and an approval mode, and a single approved payment);
+   an ordered set of machine-readable reasons a payment falls outside a
+   mandate; how those reasons are carried in an approval challenge,
+   including the OAuth Transaction Authorization Challenge; and a
+   signed, hash-chained receipt for every decision, with personal data
+   kept outside the chain so it can be erased.
+
+About This Document
+
+   This note is to be removed before publishing as an RFC.
+
+   Discussion of this document takes place on the Web Authorization
+   Protocol Working Group mailing list (oauth@ietf.org).
+
+   An open-source implementation (Apache-2.0) is described in
+   Appendix B.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+
+
+Craig                      Expires 21 May 2027                  [Page 1]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 21 May 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.1.  Scope . . . . . . . . . . . . . . . . . . . . . . . . . .   4
+     1.2.  Requirements Language . . . . . . . . . . . . . . . . . .   4
+     1.3.  Terminology . . . . . . . . . . . . . . . . . . . . . . .   4
+   2.  Overview  . . . . . . . . . . . . . . . . . . . . . . . . . .   5
+   3.  Authorization Details Types . . . . . . . . . . . . . . . . .   5
+     3.1.  The payment_mandate Type  . . . . . . . . . . . . . . . .   5
+     3.2.  The single_payment Type . . . . . . . . . . . . . . . . .   7
+     3.3.  Intent  . . . . . . . . . . . . . . . . . . . . . . . . .   7
+   4.  Mandate Evaluation  . . . . . . . . . . . . . . . . . . . . .   8
+     4.1.  What Counts Against a Limit . . . . . . . . . . . . . . .   8
+     4.2.  Reasons, in Order . . . . . . . . . . . . . . . . . . . .   8
+     4.3.  Outcomes  . . . . . . . . . . . . . . . . . . . . . . . .   9
+   5.  Signalling That Approval Is Needed  . . . . . . . . . . . . .  10
+     5.1.  With the Transaction Authorization Challenge  . . . . . .  10
+     5.2.  Without the Challenge . . . . . . . . . . . . . . . . . .  10
+     5.3.  Approval Rules  . . . . . . . . . . . . . . . . . . . . .  10
+   6.  Receipts  . . . . . . . . . . . . . . . . . . . . . . . . . .  11
+     6.1.  Receipt Members . . . . . . . . . . . . . . . . . . . . .  11
+     6.2.  Chaining and Signature  . . . . . . . . . . . . . . . . .  12
+     6.3.  Personal Data Outside the Chain . . . . . . . . . . . . .  13
+     6.4.  Disclosure  . . . . . . . . . . . . . . . . . . . . . . .  13
+   7.  Security Considerations . . . . . . . . . . . . . . . . . . .  13
+   8.  Privacy Considerations  . . . . . . . . . . . . . . . . . . .  14
+   9.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  14
+
+
+
+Craig                      Expires 21 May 2027                  [Page 2]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+     9.1.  OAuth Extensions Error Registry . . . . . . . . . . . . .  14
+     9.2.  OAuth Authorization Server Metadata . . . . . . . . . . .  14
+     9.3.  Payment Mandate Reasons Registry  . . . . . . . . . . . .  15
+     9.4.  Media Type Registration . . . . . . . . . . . . . . . . .  15
+   10. References  . . . . . . . . . . . . . . . . . . . . . . . . .  15
+     10.1.  Normative References . . . . . . . . . . . . . . . . . .  15
+     10.2.  Informative References . . . . . . . . . . . . . . . . .  16
+   Appendix A.  Examples . . . . . . . . . . . . . . . . . . . . . .  17
+   Appendix B.  Implementation Status  . . . . . . . . . . . . . . .  19
+   Acknowledgments . . . . . . . . . . . . . . . . . . . . . . . . .  20
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  20
+
+1.  Introduction
+
+   A customer who lets an agent pay bills wants to say, in terms they
+   understand: whom it may pay, how much at a time, how often, how much
+   in a month, and when it must ask first.  The bank holding the account
+   needs the same statement in a form it can enforce on every request,
+   outside the agent and outside any language model, and needs evidence
+   afterwards of what was asked, what the rules said and what it did.
+
+   Rich Authorization Requests [RFC9396] provide the container: an
+   authorization_details object whose type determines its contents.
+   This document defines the contents for payment mandates, so that one
+   agent integration works with every account-servicing institution that
+   implements it, and so that institutions describe the same limits in
+   the same way.
+
+   The OAuth Transaction Authorization Challenge
+   [I-D.rosomakho-oauth-txn-challenge] defines how a protected resource
+   challenges a client for approval of one specific transaction, and how
+   a short-lived token for that transaction is issued once the approval
+   is given.  This document is designed to work with it.  It adds three
+   things the challenge leaves to each deployment:
+
+   1.  the standing mandate against which a resource decides whether a
+       payment needs approval at all (Section 3);
+
+   2.  a machine-readable reason, from a defined and ordered set, saying
+       which rule of the mandate a payment falls outside (Section 4,
+       Section 5); and
+
+   3.  a signed receipt of every decision, including approvals, that the
+       account-servicing institution keeps and can disclose in a dispute
+       (Section 6).
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                  [Page 3]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   Use case analysis in the working group
+   [I-D.chen-oauth-agent-authz-use-cases] identifies verifiable evidence
+   created when an action is taken as a gap; Section 6 is a concrete
+   proposal for payments.
+
+1.1.  Scope
+
+   This document covers payments from an account held by the customer at
+   the institution that operates the authorization server and the
+   resource.  It does not define how an agent is identified or attested,
+   how the customer is authenticated, or how payments are executed,
+   cleared or settled.  Read-only access to account information is out
+   of scope; existing open banking types serve it.
+
+1.2.  Requirements Language
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+1.3.  Terminology
+
+   This document uses the terms "authorization server", "client",
+   "resource server" and "access token" from [RFC6749], and
+   "authorization details" from [RFC9396].
+
+   Customer:  The resource owner: the person or organisation that holds
+      the account.
+
+   Agent:  The client acting for the customer.  It may be operated by a
+      third party and may be driven by a language model.
+
+   Institution:  The account-servicing institution that operates the
+      authorization server, the resource server, the mandate store and
+      the receipt log.
+
+   Mandate:  The authorization details of type payment_mandate the
+      customer approved, as stored by the institution.
+
+   Payee:  A beneficiary the customer has saved at the institution,
+      identified by an institution-assigned identifier.
+
+   Held payment:  A payment the institution has accepted from the agent
+      but whose outcome its payment system has not yet confirmed or
+      declined.
+
+
+
+
+Craig                      Expires 21 May 2027                  [Page 4]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   Reason:  A code from Section 4.2 saying which rule of the mandate a
+      payment falls outside.
+
+2.  Overview
+
+    Customer        Agent                Institution (AS, RS, receipts)
+       |              |  1. authorization request with           |
+       |              |     payment_mandate, intent              |
+       |<-------------+------------------------------------------>|
+       |  2. consent screen: payees, limits, approval mode        |
+       |--------------------------------------------------------->|
+       |              |  3. access token (sender-constrained)    |
+       |              |<-----------------------------------------|
+       |              |  4. payment request                       |
+       |              |----------------------------------------->|
+       |              |        5. evaluate mandate (Section 4)   |
+       |              |           covered: execute, receipt      |
+       |              |           not covered: hold, receipt     |
+       |              |  6. approval challenge with reason       |
+       |              |<-----------------------------------------|
+       |  7. approve this exact payment (out of band)             |
+       |--------------------------------------------------------->|
+       |              |  8. single_payment token, same payment   |
+       |              |----------------------------------------->|
+       |              |  9. result; receipt names the approval   |
+       |              |<-----------------------------------------|
+
+            Figure 1: Payment under a mandate, with an approval
+
+   The customer approves a standing mandate once (steps 1 to 3).  Each
+   payment is evaluated against it by the institution (step 5).  A
+   payment inside the mandate proceeds.  A payment outside it is held,
+   and the agent is told the reason and offered a single payment for the
+   customer to approve (steps 6 to 8).  Every decision produces a
+   receipt (Section 6).
+
+3.  Authorization Details Types
+
+3.1.  The payment_mandate Type
+
+   An authorization details object of type payment_mandate grants the
+   agent permission to initiate payments to named payees within limits.
+   It has the following members, in addition to type:
+
+
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                  [Page 5]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   actions:
+      REQUIRED.  An array containing the string
+      pay_existing_beneficiary.  Other values are reserved for future
+      extensions; an institution MUST refuse a mandate containing an
+      action it does not support.
+
+   accounts:
+      REQUIRED.  An array of institution-assigned account identifiers
+      the agent may pay from.
+
+   payees:
+      REQUIRED.  A non-empty array of institution-assigned payee
+      identifiers.  Payees are fixed when the mandate is approved: a
+      payee the customer saves later is not covered until the customer
+      adds it to the mandate.  An agent MUST NOT be able to add a payee.
+
+   approval:
+      REQUIRED.  The approval mode: every_payment (the customer approves
+      each payment) or within_limits (payments inside the mandate
+      proceed without approval).
+
+   limits:
+      REQUIRED.  An object with the following members.  Amounts are
+      objects with members amount (a decimal string with at most the
+      number of fractional digits of the currency) and currency (an ISO
+      4217 alphabetic code).  All amounts in one mandate MUST use the
+      same currency.
+
+      per_payment:  REQUIRED.  The largest single payment.  It MUST NOT
+         exceed per_period.amount.
+
+      per_period:  REQUIRED.  An object with amount and currency (the
+         most that may be paid in one period), count (an integer, the
+         most payments in one period) and period (one of day, week,
+         month).  Periods are calendar periods in the time zone the
+         institution publishes as payment_mandate_time_zone in its
+         authorization server metadata [RFC8414].
+
+      approve_above:  OPTIONAL.  With within_limits, payments above this
+         amount need the customer's approval.
+
+   valid_until:
+      OPTIONAL.  An RFC 3339 [RFC3339] date-time after which the mandate
+      covers no payment.  The institution MAY impose a shorter maximum.
+
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                  [Page 6]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   intent:
+      OPTIONAL.  A plain-language statement of what the mandate is for,
+      at most 140 characters, for example "Pay my monthly utility
+      bills".  See Section 3.3.
+
+   An agent MAY send a payment_mandate in its authorization request with
+   any members omitted or proposed.  The values that apply are those the
+   customer chooses during consent.  The authorization server MUST
+   return, and store, the authorization details as granted, which MAY be
+   narrower than requested and MUST NOT be broader than what the
+   customer chose (Section 7 of [RFC9396]).
+
+3.2.  The single_payment Type
+
+   An authorization details object of type single_payment permits
+   exactly one payment.  It is offered by the institution when a payment
+   falls outside a mandate (Section 5); an agent MUST NOT construct one
+   itself, and an institution MUST refuse an approval request for a
+   single_payment it did not offer.  Members:
+
+   from:  REQUIRED.  The debtor account identifier.
+
+   to:  REQUIRED.  An object with name and account of the payee.
+
+   amount:  REQUIRED.  The amount object.
+
+   reference:  REQUIRED.  The payment reference; may be empty.
+
+   The institution computes a digest over the JCS canonical form
+   [RFC8785] of these members.  An approval, and any token issued from
+   it, is bound to that digest and to the held payment it was offered
+   for.  A payment whose digest differs MUST be refused.
+
+3.3.  Intent
+
+   The intent member records the purpose the customer confirmed.  The
+   agent MAY propose it; the consent screen MUST show it and SHOULD let
+   the customer change it.  It is informative: it does not widen or
+   narrow what the mandate permits, and an institution MUST NOT base an
+   authorization decision on it.  It is recorded on receipts (Section 6)
+   as personal data (Section 6.3).
+
+
+
+
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                  [Page 7]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+4.  Mandate Evaluation
+
+   The resource server evaluates every payment request against the
+   stored mandate after it has validated the access token, its sender
+   constraint (for example DPoP [RFC9449]), and that the grant is
+   active.  Evaluation and, if the payment proceeds or is held,
+   recording the held payment MUST be performed as one atomic operation
+   per mandate, so that two concurrent payments cannot both be found
+   within a limit that only one fits.
+
+4.1.  What Counts Against a Limit
+
+   For the period containing the request, the amount used and the count
+   of payments used each include payments the institution has completed,
+   payments it holds while its payment system has not confirmed or
+   declined them, and payments the customer approved under a
+   single_payment.  A held payment MUST continue to count until the
+   payment system confirms or declines it, or the institution has
+   cancelled it and the payment system has confirmed the cancellation.
+   It MUST NOT be released on a timer.
+
+4.2.  Reasons, in Order
+
+   The resource server applies the following rules in order.  The first
+   rule the payment breaks determines the reason.  If it breaks none,
+   the payment is covered by the mandate.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                  [Page 8]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   +=======+=========================+================================+
+   | Order | Reason                  | The payment...                 |
+   +=======+=========================+================================+
+   | 1     | new_recipient           | is to an account that is not a |
+   |       |                         | saved payee of the customer    |
+   +-------+-------------------------+--------------------------------+
+   | 2     | payee_not_on_mandate    | is to a saved payee that is    |
+   |       |                         | not in payees                  |
+   +-------+-------------------------+--------------------------------+
+   | 3     | over_per_payment        | is above limits.per_payment    |
+   +-------+-------------------------+--------------------------------+
+   | 4     | over_period_count       | would exceed                   |
+   |       |                         | limits.per_period.count        |
+   +-------+-------------------------+--------------------------------+
+   | 5     | over_period_limit       | would take the amount used     |
+   |       |                         | above limits.per_period.amount |
+   +-------+-------------------------+--------------------------------+
+   | 6     | every_payment           | is under a mandate whose       |
+   |       |                         | approval is every_payment      |
+   +-------+-------------------------+--------------------------------+
+   | 7     | over_approval_threshold | is above limits.approve_above  |
+   +-------+-------------------------+--------------------------------+
+
+                     Table 1: Payment mandate reasons
+
+   Reasons 1 to 5 are limits of the mandate; reasons 6 and 7 are the
+   customer's choice to be asked.  A payment from an account not in
+   accounts, an expired mandate, or an action not granted is not a
+   reason: it is refused with insufficient_authorization or the
+   applicable error, and no approval is offered.
+
+   The fixed order means an agent receives the same reason from every
+   institution for the same situation, and a customer is told the most
+   fundamental problem first.
+
+4.3.  Outcomes
+
+   A covered payment proceeds.  For a payment with a reason, the
+   institution either:
+
+   *  holds the payment and offers it for approval (Section 5); or
+
+   *  refuses it, with the reason, without offering approval.
+
+
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                  [Page 9]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   An institution MAY refuse rather than offer approval for reasons 1 to
+   5, for example where the client's tier of assurance is low.  It MUST
+   offer approval, not refuse, for reasons 6 and 7.  An approval MUST
+   NOT add a payee, raise a limit or change the mandate.  An approval
+   given for reason 5 permits the period's limit to be exceeded by that
+   one payment only.
+
+5.  Signalling That Approval Is Needed
+
+5.1.  With the Transaction Authorization Challenge
+
+   A resource server that implements [I-D.rosomakho-oauth-txn-challenge]
+   responds with a transaction authorization challenge whose
+   authorization_details contains the single single_payment it offers,
+   and adds the claim:
+
+   mandate_reason:  The reason from Section 4.2.
+
+   The challenge's reason claim SHOULD state the same reason in words
+   the customer can understand, built by the institution from the
+   payment itself and never from text supplied by the agent alone.  The
+   challenge's txn identifies the held payment.
+
+5.2.  Without the Challenge
+
+   Otherwise, the resource server responds with HTTP status 403 and a
+   JSON [RFC8259] body with these members:
+
+   error:  approval_required.
+
+   error_description:  The reason in words.
+
+   reason:  The reason from Section 4.2.
+
+   authorization_details:  An array containing the single single_payment
+      offered.
+
+   payment_id:  The identifier of the held payment.
+
+   The agent requests the customer's approval for exactly that
+   single_payment, for example with Client-Initiated Backchannel
+   Authentication [CIBA], and repeats the payment with the resulting
+   token and the same idempotency key.
+
+5.3.  Approval Rules
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                 [Page 10]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   *  The prompt shown to the customer MUST be built by the institution
+      from the single_payment.  Any text from the agent MUST be shown
+      separately and labelled as the agent's words.
+
+   *  An approval and any token issued from it MUST be usable once, for
+      the held payment it was offered for, and only before it expires.
+      The institution MUST mark the approval used in the same atomic
+      operation that moves the held payment to execution.
+
+   *  A payment completed under an approval counts against the mandate's
+      period amount and count (Section 4.1).
+
+6.  Receipts
+
+   The institution records every decision on a payment request, whether
+   covered, held, refused, approved, completed, declined, cancelled or
+   of unknown outcome, as a receipt.  Receipts are kept by the
+   institution, not by the agent; the agent is never its own witness.
+
+6.1.  Receipt Members
+
+   A receipt is a JSON object with these members.  Members marked
+   personal are carried as commitments (Section 6.3).
+
+   +========================+=============+===========================+
+   | Member                 | Presence    | Meaning                   |
+   +========================+=============+===========================+
+   | seq                    | REQUIRED    | Position in the chain,    |
+   |                        |             | from 1                    |
+   +------------------------+-------------+---------------------------+
+   | prev                   | REQUIRED    | The hash of the previous  |
+   |                        |             | receipt in the chain, or  |
+   |                        |             | the genesis value         |
+   +------------------------+-------------+---------------------------+
+   | time                   | REQUIRED    | RFC 3339 date-time with   |
+   |                        |             | offset                    |
+   +------------------------+-------------+---------------------------+
+   | grant_id               | REQUIRED    | The mandate's grant       |
+   |                        |             | identifier                |
+   +------------------------+-------------+---------------------------+
+   | mandate_version        | REQUIRED    | The version of the        |
+   |                        |             | mandate evaluated         |
+   +------------------------+-------------+---------------------------+
+   | client_id              | REQUIRED    | The agent                 |
+   +------------------------+-------------+---------------------------+
+   | action                 | REQUIRED    | For example payment       |
+   +------------------------+-------------+---------------------------+
+   | outcome                | REQUIRED    | One of allowed, held,     |
+
+
+
+Craig                      Expires 21 May 2027                 [Page 11]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   |                        |             | refused, failed,          |
+   |                        |             | cancelled, unknown        |
+   +------------------------+-------------+---------------------------+
+   | basis                  | REQUIRED    | mandate (covered),        |
+   |                        |             | approval (the customer    |
+   |                        |             | approved), or refused     |
+   +------------------------+-------------+---------------------------+
+   | reason                 | When        | The reason from           |
+   |                        | applicable  | Section 4.2               |
+   +------------------------+-------------+---------------------------+
+   | approval_id            | When        | The customer's approval   |
+   |                        | applicable  |                           |
+   +------------------------+-------------+---------------------------+
+   | payment_id,            | When        | Match the receipt to the  |
+   | idempotency_key,       | applicable  | agent's request and to    |
+   | institution_payment_id |             | the institution's payment |
+   |                        |             | record                    |
+   +------------------------+-------------+---------------------------+
+   | policy                 | RECOMMENDED | Object with version and   |
+   |                        |             | hash of the institution's |
+   |                        |             | policy in force           |
+   +------------------------+-------------+---------------------------+
+   | intent                 | When        | The mandate's intent      |
+   |                        | present,    |                           |
+   |                        | personal    |                           |
+   +------------------------+-------------+---------------------------+
+   | agent_instruction      | When        | What the agent states it  |
+   |                        | supplied,   | was asked to do, labelled |
+   |                        | personal    | as supplied by the agent. |
+   |                        |             | Never used to decide      |
+   +------------------------+-------------+---------------------------+
+   | payment                | When        | Payee name and account,   |
+   |                        | applicable, | amount, currency and      |
+   |                        | personal    | reference                 |
+   +------------------------+-------------+---------------------------+
+
+                         Table 2: Receipt members
+
+6.2.  Chaining and Signature
+
+   The hash of a receipt is the string sha256: followed by the lowercase
+   hexadecimal SHA-256 digest of the JCS [RFC8785] serialisation of the
+   receipt.  The genesis value of prev is sha256: followed by 64 zeros.
+   The institution signs each receipt with a JWS [RFC7515] whose payload
+   is {"seq": ..., "hash": ...}, whose typ header is payment-
+   receipt+jwt, and whose kid identifies a key published in the
+   institution's JWK Set. Retired keys MUST remain published while
+   receipts signed with them are retained.
+
+
+
+Craig                      Expires 21 May 2027                 [Page 12]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   An institution SHOULD keep one chain per mandate and SHOULD
+   periodically publish each chain's head so that an operator or auditor
+   can detect a truncated chain.  Changing or deleting a receipt breaks
+   every later link.
+
+6.3.  Personal Data Outside the Chain
+
+   Personal members are not written into the chained receipt.  For each,
+   the receipt carries, in a member personal, a commitment: sha256:
+   followed by the hex SHA-256 digest of the JCS serialisation of
+   {"salt": s, "value": v}, where s is at least 128 bits from a
+   cryptographically secure random source, unique per member per
+   receipt.  The value and salt are stored separately and MAY be erased,
+   for example to meet a data-subject request under [GDPR] or [POPIA],
+   without breaking the chain.  A party given a value and its salt can
+   check it against the receipt.
+
+6.4.  Disclosure
+
+   An institution SHOULD return the signed receipt, or its hash, in the
+   response to each payment request, so the agent's operator holds a
+   copy.  For a dispute, the institution MAY disclose an evidence set:
+   the receipts for the mandate, their signatures, the disclosed
+   personal values with their salts, the policy documents named, and the
+   public keys needed to verify them.
+
+7.  Security Considerations
+
+   The security of the mandate depends on evaluation taking place at the
+   institution, outside the agent.  An agent driven by a language model
+   can be manipulated by content it reads (indirect prompt injection);
+   the rules in Section 4 bound what such an agent can do regardless of
+   what it is instructed to do.  For the same reason, intent and
+   agent_instruction are never inputs to an authorization decision.
+
+   Access tokens and approval tokens SHOULD be sender-constrained, for
+   example with DPoP [RFC9449], and the mandate SHOULD be bound to the
+   agent's key when the customer approves it, so that a leaked token or
+   grant identifier cannot be used by another client.
+
+   Without the atomicity required in Section 4, concurrent requests
+   could each pass a limit only one fits under.  Without counting held
+   payments (Section 4.1), an agent could exceed a limit by sending
+   payments faster than the payment system confirms them.  Releasing a
+   held payment on a timer would allow a payment that later completes to
+   be paid twice against the limit.
+
+
+
+
+
+Craig                      Expires 21 May 2027                 [Page 13]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   A reason tells the agent which rule a payment broke.  An agent could
+   probe limits by sending payments and reading reasons.  Institutions
+   SHOULD rate-limit payment requests and approval requests, and limit
+   the number of pending approvals per mandate, to prevent approval
+   fatigue.
+
+   Receipts prove that a record was made by the institution's key and
+   not altered afterwards.  They do not by themselves prove that the
+   customer understood what they approved, or allocate liability.
+
+8.  Privacy Considerations
+
+   A mandate and its receipts describe a customer's financial
+   relationships.  The institution SHOULD use payee and account
+   identifiers that are meaningful only within the institution, and a
+   pairwise subject identifier per agent.  The agent learns the reason a
+   payment needs approval, which may reveal how much of a limit is used;
+   this is inherent in telling the agent why, and the customer chose to
+   share it with that agent.
+
+   Personal members of receipts are committed rather than recorded
+   (Section 6.3) so that the institution can meet erasure and
+   minimisation obligations while keeping a verifiable record.  Salts
+   prevent confirming a guessed value from the commitment alone.
+
+9.  IANA Considerations
+
+9.1.  OAuth Extensions Error Registry
+
+   This document requests registration of the following value in the
+   "OAuth Extensions Error Registry" established by [RFC6749]:
+
+   Name:  approval_required
+
+   Usage Location:  resource access error response
+
+   Protocol Extension:  Payment mandates
+
+   Change controller:  IETF
+
+   Specification document:  Section 5.2 of this document
+
+9.2.  OAuth Authorization Server Metadata
+
+   This document requests registration of the following value in the
+   "OAuth Authorization Server Metadata" registry established by
+   [RFC8414]:
+
+
+
+
+Craig                      Expires 21 May 2027                 [Page 14]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   Metadata Name:  payment_mandate_time_zone
+
+   Metadata Description:  IANA time zone name in which payment mandate
+      periods are counted
+
+   Change Controller:  IETF
+
+   Specification Document:  Section 3.1 of this document
+
+9.3.  Payment Mandate Reasons Registry
+
+   This document requests that IANA create a registry "Payment Mandate
+   Reasons" with the registration policy Specification Required
+   [RFC8126].  Each entry has a reason name, a position in the
+   evaluation order, a description, and a reference.  The initial
+   contents are the reasons in Section 4.2.  A new reason MUST state
+   where it falls in the order.
+
+9.4.  Media Type Registration
+
+   This document requests registration of the media type application/
+   payment-receipt+jwt for signed receipts as defined in Section 6.2.
+   Template details will be completed in a later revision.
+
+10.  References
+
+10.1.  Normative References
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/info/rfc2119>.
+
+   [RFC3339]  Klyne, G. and C. Newman, "Date and Time on the Internet:
+              Timestamps", RFC 3339, DOI 10.17487/RFC3339, July 2002,
+              <https://www.rfc-editor.org/info/rfc3339>.
+
+   [RFC6749]  Hardt, D., Ed., "The OAuth 2.0 Authorization Framework",
+              RFC 6749, DOI 10.17487/RFC6749, October 2012,
+              <https://www.rfc-editor.org/info/rfc6749>.
+
+   [RFC7515]  Jones, M., Bradley, J., and N. Sakimura, "JSON Web
+              Signature (JWS)", RFC 7515, DOI 10.17487/RFC7515, May
+              2015, <https://www.rfc-editor.org/info/rfc7515>.
+
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                 [Page 15]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   [RFC8126]  Cotton, M., Leiba, B., and T. Narten, "Guidelines for
+              Writing an IANA Considerations Section in RFCs", BCP 26,
+              RFC 8126, DOI 10.17487/RFC8126, June 2017,
+              <https://www.rfc-editor.org/info/rfc8126>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/info/rfc8174>.
+
+   [RFC8259]  Bray, T., Ed., "The JavaScript Object Notation (JSON) Data
+              Interchange Format", STD 90, RFC 8259,
+              DOI 10.17487/RFC8259, December 2017,
+              <https://www.rfc-editor.org/info/rfc8259>.
+
+   [RFC8414]  Jones, M., Sakimura, N., and J. Bradley, "OAuth 2.0
+              Authorization Server Metadata", RFC 8414,
+              DOI 10.17487/RFC8414, June 2018,
+              <https://www.rfc-editor.org/info/rfc8414>.
+
+   [RFC8785]  Rundgren, A., Jordan, B., and S. Erdtman, "JSON
+              Canonicalization Scheme (JCS)", RFC 8785,
+              DOI 10.17487/RFC8785, June 2020,
+              <https://www.rfc-editor.org/info/rfc8785>.
+
+   [RFC9396]  Lodderstedt, T., Richer, J., and B. Campbell, "OAuth 2.0
+              Rich Authorization Requests", RFC 9396,
+              DOI 10.17487/RFC9396, May 2023,
+              <https://www.rfc-editor.org/info/rfc9396>.
+
+10.2.  Informative References
+
+   [CIBA]     Fernandez, G., Walter, F., Nennker, A., Tonge, D., and B.
+              Campbell, "OpenID Connect Client-Initiated Backchannel
+              Authentication Flow - Core 1.0", September 2021,
+              <https://openid.net/specs/openid-client-initiated-
+              backchannel-authentication-core-1_0.html>.
+
+   [GDPR]     European Parliament and Council of the European Union,
+              "Regulation (EU) 2016/679 (General Data Protection
+              Regulation)", April 2016,
+              <https://eur-lex.europa.eu/eli/reg/2016/679/oj>.
+
+
+
+
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                 [Page 16]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   [I-D.chen-oauth-agent-authz-use-cases]
+              Chen, M., Chen, J., Yao, J., Jiang, Y., and P. Liu, "Agent
+              Authorization use cases and gap analysis", Work in
+              Progress, Internet-Draft, draft-chen-oauth-agent-authz-
+              use-cases-05, October 2026,
+              <https://datatracker.ietf.org/doc/draft-chen-oauth-agent-
+              authz-use-cases/>.
+
+   [I-D.rosomakho-oauth-txn-challenge]
+              Rosomakho, Y., Campbell, B., McGuinness, K., and P.
+              Kasselman, "OAuth Transaction Authorization Challenge",
+              Work in Progress, Internet-Draft, draft-rosomakho-oauth-
+              txn-challenge-00, June 2026,
+              <https://datatracker.ietf.org/doc/draft-rosomakho-oauth-
+              txn-challenge/>.
+
+   [POPIA]    Republic of South Africa, "Protection of Personal
+              Information Act 4 of 2013", November 2013,
+              <https://www.gov.za/documents/protection-personal-
+              information-act>.
+
+   [RFC7942]  Sheffer, Y. and A. Farrel, "Improving Awareness of Running
+              Code: The Implementation Status Section", BCP 205,
+              RFC 7942, DOI 10.17487/RFC7942, July 2016,
+              <https://www.rfc-editor.org/info/rfc7942>.
+
+   [RFC9449]  Fett, D., Campbell, B., Bradley, J., Lodderstedt, T.,
+              Jones, M., and D. Waite, "OAuth 2.0 Demonstrating Proof of
+              Possession (DPoP)", RFC 9449, DOI 10.17487/RFC9449,
+              September 2023, <https://www.rfc-editor.org/info/rfc9449>.
+
+Appendix A.  Examples
+
+   A mandate as granted, as it appears in authorization_details:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                 [Page 17]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   {
+     "type": "payment_mandate",
+     "actions": ["pay_existing_beneficiary"],
+     "accounts": ["acc_4821"],
+     "payees": ["ben_water", "ben_city_power"],
+     "approval": "within_limits",
+     "limits": {
+       "per_payment": {"amount": "1000.00", "currency": "ZAR"},
+       "per_period": {"amount": "2000.00", "currency": "ZAR",
+                      "count": 4, "period": "month"},
+       "approve_above": {"amount": "500.00", "currency": "ZAR"}
+     },
+     "valid_until": "2027-02-15T23:59:59+02:00",
+     "intent": "Pay my monthly utility bills"
+   }
+
+   A payment to a saved beneficiary that is not one of the mandate's
+   payees, without the transaction challenge:
+
+   HTTP/1.1 403 Forbidden
+   Content-Type: application/json
+
+   {
+     "error": "approval_required",
+     "error_description": "Sunrise Primary School is not one of the
+       payees you chose for this agent",
+     "reason": "payee_not_on_mandate",
+     "payment_id": "pi_8Qm2Lk",
+     "authorization_details": [{
+       "type": "single_payment",
+       "from": "acc_4821",
+       "to": {"name": "Sunrise Primary School", "account": "62114930"},
+       "amount": {"amount": "450.00", "currency": "ZAR"},
+       "reference": "Term 4"
+     }]
+   }
+
+   The receipt for the payment once approved and completed:
+
+
+
+
+
+
+
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                 [Page 18]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+   {
+     "seq": 42, "prev": "sha256:9c1e...",
+     "time": "2026-11-17T10:42:07+02:00",
+     "grant_id": "g_3fa8", "mandate_version": 1, "client_id": "kaya",
+     "action": "payment", "outcome": "allowed", "basis": "approval",
+     "reason": "payee_not_on_mandate", "approval_id": "ar_51b0",
+     "payment_id": "pi_8Qm2Lk", "idempotency_key": "school-term4-2026",
+     "institution_payment_id": "bp_Jx41",
+     "policy": {"version": "CHG-2026-1182", "hash": "sha256:4be0..."},
+     "personal": {
+       "payment": "sha256:...",
+       "intent": "sha256:...",
+       "agent_instruction": "sha256:..."
+     }
+   }
+
+Appendix B.  Implementation Status
+
+   This section is to be removed before publishing as an RFC.
+
+   This section records the status of known implementations of the
+   protocol defined by this specification at the time of posting of this
+   Internet-Draft, and is based on a proposal described in [RFC7942].
+
+   Organization:  Veridact Valet open-source project
+
+   Name:  Veridact Valet, https://github.com/richard-craig/veridact-
+      valet
+
+   Description:  A reference authorization server, resource-server
+      enforcement, approval flow (CIBA) and receipt log for agents
+      acting on bank accounts, with a direct API (DPoP-bound) and an MCP
+      gateway for AI assistants.
+
+   Maturity:  Proof of concept, with a conformance test suite for every
+      reason in Section 4.2 and for the receipt format.
+
+   Coverage:  All of this document, under earlier type names
+      (valet_payments, valet_payment_once) and with the approval mode
+      values approved_payer and bill_payer.  Payee details are not yet
+      committed outside the chain (Section 6.3).
+
+   Licensing:  Apache-2.0
+
+   Contact:  Richard Craig, richard1gb@gmail.com
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                 [Page 19]
+
+Internet-Draft            RAR Payment Mandates             November 2026
+
+
+Acknowledgments
+
+   The approval challenge this document builds on is the work of the
+   authors of [I-D.rosomakho-oauth-txn-challenge].
+
+Author's Address
+
+   Richard Craig
+   Independent
+   South Africa
+   Email: richard1gb@gmail.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Craig                      Expires 21 May 2027                 [Page 20]
