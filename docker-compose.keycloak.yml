@@ -11,6 +11,7 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HOSTNAME: http://localhost:8080          # the issuer the browser and ID tokens use
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"     # lets the bank reach token/JWKS endpoints at http://keycloak:8080
+      JAVA_OPTS_APPEND: "-XX:-UseBASE64Intrinsics" # Java4Shell (CVE-2026-114938) mitigation until the JDK is patched
     volumes: ["./deploy/keycloak:/opt/keycloak/data/import:ro"]
     ports: ["8080:8080"]
 
