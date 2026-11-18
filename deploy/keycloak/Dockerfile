@@ -14,4 +14,7 @@ FROM ${KEYCLOAK_IMAGE}
 COPY --from=build /src/target/keycloak-valet-0.1.0.jar /opt/keycloak/providers/
 COPY deploy/keycloak/marula-realm.json /opt/keycloak/data/import/marula-realm.json
 ENV KC_HEALTH_ENABLED=true
+# Java4Shell (CVE-2026-114938, 17 Nov 2026): heap overflow in the JDK's AVX-512 Base64 decoder, pre-auth RCE shown
+# against Keycloak. Turn the vulnerable intrinsic off until the image ships a patched JDK. Keep this until then.
+ENV JAVA_OPTS_APPEND="-XX:-UseBASE64Intrinsics"
 RUN /opt/keycloak/bin/kc.sh build --health-enabled=true
