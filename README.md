@@ -13,6 +13,7 @@ This repository holds the design and a working proof of concept. The design is i
 - [Where Valet fits](docs/where-valet-fits.md): start here. What Valet is, where it sits next to open banking and the bank's identity platform, how the agent is bound to the customer, token and mandate, and how it lines up with AP2, Verifiable Intent and the Personal Agent Protocol.
 - [Threat model](docs/threat-model.md): the controls on each journey (direct agents and AI assistants), their status, and the known gaps.
 - [The Valet profile](docs/valet-profile.md): the shared permission standard in one place. Access levels, approval rules, check order, error codes and receipt format, each marked built or specified.
+- [The Valet insurance profile](docs/valet-insurance-profile.md): the same pattern for insurers. Policy, claim and change mandates, protected actions that always go back to the customer, and receipts that keep health data out of the chain. Proposed.
 - [Technical design](docs/technical-design.md): the profile, data model, flows, check order, receipts, security and identity-provider support.
 - [MCP gateway design](docs/mcp-gateway-design.md) (draft, not yet built): how Claude, ChatGPT, Copilot and Gemini connect through a bank-run MCP gateway.
 - [Control framework mapping](docs/control-framework-mapping.md): Valet against a bank control framework for AI agents (autonomy tiers, assurance states, the minimum evidence set, stopping an agent, board questions) and against South African, EU and UK regulation.
