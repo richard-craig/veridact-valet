@@ -1,0 +1,499 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE rfc [
+  <!ENTITY nbsp "&#160;">
+]>
+<rfc xmlns:xi="http://www.w3.org/2001/XInclude"
+     version="3"
+     category="std"
+     docName="draft-craig-oauth-rar-payment-mandates-00"
+     ipr="trust200902"
+     submissionType="IETF"
+     consensus="true"
+     sortRefs="true"
+     symRefs="true"
+     tocInclude="true">
+
+  <front>
+    <title abbrev="RAR Payment Mandates">Rich Authorization Requests Profile for Agent Payment Mandates, Approval Reasons and Receipts</title>
+    <seriesInfo name="Internet-Draft" value="draft-craig-oauth-rar-payment-mandates-00"/>
+
+    <author fullname="Richard Craig" initials="R." surname="Craig">
+      <organization>Independent</organization>
+      <address>
+        <postal><country>ZA</country></postal>
+        <email>richard1gb@gmail.com</email>
+      </address>
+    </author>
+
+    <date year="2026" month="November" day="17"/>
+    <area>Security</area>
+    <workgroup>Web Authorization Protocol</workgroup>
+    <keyword>OAuth</keyword>
+    <keyword>RAR</keyword>
+    <keyword>AI agents</keyword>
+    <keyword>payments</keyword>
+    <keyword>mandate</keyword>
+
+    <abstract>
+      <t>Software agents, including those driven by large language models, increasingly initiate payments on behalf of people. OAuth 2.0 Rich Authorization Requests (RFC 9396) can carry what such an agent may do, but there is no common way to express the limits that banks and their customers need, to tell an agent why a payment needs the customer's approval, or to keep an independent record of what was decided.</t>
+      <t>This document defines two authorization details types for payment mandates (a standing mandate with named payees, per-payment and per-period limits and an approval mode, and a single approved payment); an ordered set of machine-readable reasons a payment falls outside a mandate; how those reasons are carried in an approval challenge, including the OAuth Transaction Authorization Challenge; and a signed, hash-chained receipt for every decision, with personal data kept outside the chain so it can be erased.</t>
+    </abstract>
+
+    <note removeInRFC="true">
+      <name>About This Document</name>
+      <t>Discussion of this document takes place on the Web Authorization Protocol Working Group mailing list (oauth@ietf.org).</t>
+      <t>An open-source implementation (Apache-2.0) is described in <xref target="impl-status"/>.</t>
+    </note>
+  </front>
+
+  <middle>
+
+    <section anchor="intro">
+      <name>Introduction</name>
+      <t>A customer who lets an agent pay bills wants to say, in terms they understand: whom it may pay, how much at a time, how often, how much in a month, and when it must ask first. The bank holding the account needs the same statement in a form it can enforce on every request, outside the agent and outside any language model, and needs evidence afterwards of what was asked, what the rules said and what it did.</t>
+      <t>Rich Authorization Requests <xref target="RFC9396"/> provide the container: an <tt>authorization_details</tt> object whose <tt>type</tt> determines its contents. This document defines the contents for payment mandates, so that one agent integration works with every account-servicing institution that implements it, and so that institutions describe the same limits in the same way.</t>
+      <t>The OAuth Transaction Authorization Challenge <xref target="I-D.rosomakho-oauth-txn-challenge"/> defines how a protected resource challenges a client for approval of one specific transaction, and how a short-lived token for that transaction is issued once the approval is given. This document is designed to work with it. It adds three things the challenge leaves to each deployment:</t>
+      <ol>
+        <li>the standing mandate against which a resource decides whether a payment needs approval at all (<xref target="types"/>);</li>
+        <li>a machine-readable reason, from a defined and ordered set, saying which rule of the mandate a payment falls outside (<xref target="evaluation"/>, <xref target="signalling"/>); and</li>
+        <li>a signed receipt of every decision, including approvals, that the account-servicing institution keeps and can disclose in a dispute (<xref target="receipts"/>).</li>
+      </ol>
+      <t>Use case analysis in the working group <xref target="I-D.chen-oauth-agent-authz-use-cases"/> identifies verifiable evidence created when an action is taken as a gap; <xref target="receipts"/> is a concrete proposal for payments.</t>
+
+      <section>
+        <name>Scope</name>
+        <t>This document covers payments from an account held by the customer at the institution that operates the authorization server and the resource. It does not define how an agent is identified or attested, how the customer is authenticated, or how payments are executed, cleared or settled. Read-only access to account information is out of scope; existing open banking types serve it.</t>
+      </section>
+
+      <section>
+        <name>Requirements Language</name>
+        <t>The key words "<bcp14>MUST</bcp14>", "<bcp14>MUST NOT</bcp14>", "<bcp14>REQUIRED</bcp14>", "<bcp14>SHALL</bcp14>", "<bcp14>SHALL NOT</bcp14>", "<bcp14>SHOULD</bcp14>", "<bcp14>SHOULD NOT</bcp14>", "<bcp14>RECOMMENDED</bcp14>", "<bcp14>NOT RECOMMENDED</bcp14>", "<bcp14>MAY</bcp14>", and "<bcp14>OPTIONAL</bcp14>" in this document are to be interpreted as described in BCP&nbsp;14 <xref target="RFC2119"/> <xref target="RFC8174"/> when, and only when, they appear in all capitals, as shown here.</t>
+      </section>
+
+      <section>
+        <name>Terminology</name>
+        <t>This document uses the terms "authorization server", "client", "resource server" and "access token" from <xref target="RFC6749"/>, and "authorization details" from <xref target="RFC9396"/>.</t>
+        <dl>
+          <dt>Customer:</dt><dd>The resource owner: the person or organisation that holds the account.</dd>
+          <dt>Agent:</dt><dd>The client acting for the customer. It may be operated by a third party and may be driven by a language model.</dd>
+          <dt>Institution:</dt><dd>The account-servicing institution that operates the authorization server, the resource server, the mandate store and the receipt log.</dd>
+          <dt>Mandate:</dt><dd>The authorization details of type <tt>payment_mandate</tt> the customer approved, as stored by the institution.</dd>
+          <dt>Payee:</dt><dd>A beneficiary the customer has saved at the institution, identified by an institution-assigned identifier.</dd>
+          <dt>Held payment:</dt><dd>A payment the institution has accepted from the agent but whose outcome its payment system has not yet confirmed or declined.</dd>
+          <dt>Reason:</dt><dd>A code from <xref target="reasons"/> saying which rule of the mandate a payment falls outside.</dd>
+        </dl>
+      </section>
+    </section>
+
+    <section anchor="overview">
+      <name>Overview</name>
+      <figure>
+        <name>Payment under a mandate, with an approval</name>
+        <artwork type="ascii-art"><![CDATA[
+ Customer        Agent                Institution (AS, RS, receipts)
+    |              |  1. authorization request with           |
+    |              |     payment_mandate, intent              |
+    |<-------------+------------------------------------------>|
+    |  2. consent screen: payees, limits, approval mode        |
+    |--------------------------------------------------------->|
+    |              |  3. access token (sender-constrained)    |
+    |              |<-----------------------------------------|
+    |              |  4. payment request                       |
+    |              |----------------------------------------->|
+    |              |        5. evaluate mandate (Section 4)   |
+    |              |           covered: execute, receipt      |
+    |              |           not covered: hold, receipt     |
+    |              |  6. approval challenge with reason       |
+    |              |<-----------------------------------------|
+    |  7. approve this exact payment (out of band)             |
+    |--------------------------------------------------------->|
+    |              |  8. single_payment token, same payment   |
+    |              |----------------------------------------->|
+    |              |  9. result; receipt names the approval   |
+    |              |<-----------------------------------------|
+]]></artwork>
+      </figure>
+      <t>The customer approves a standing mandate once (steps 1 to 3). Each payment is evaluated against it by the institution (step 5). A payment inside the mandate proceeds. A payment outside it is held, and the agent is told the reason and offered a single payment for the customer to approve (steps 6 to 8). Every decision produces a receipt (<xref target="receipts"/>).</t>
+    </section>
+
+    <section anchor="types">
+      <name>Authorization Details Types</name>
+
+      <section anchor="mandate-type">
+        <name>The payment_mandate Type</name>
+        <t>An authorization details object of type <tt>payment_mandate</tt> grants the agent permission to initiate payments to named payees within limits. It has the following members, in addition to <tt>type</tt>:</t>
+        <dl newline="true">
+          <dt>actions:</dt>
+          <dd><bcp14>REQUIRED</bcp14>. An array containing the string <tt>pay_existing_beneficiary</tt>. Other values are reserved for future extensions; an institution <bcp14>MUST</bcp14> refuse a mandate containing an action it does not support.</dd>
+          <dt>accounts:</dt>
+          <dd><bcp14>REQUIRED</bcp14>. An array of institution-assigned account identifiers the agent may pay from.</dd>
+          <dt>payees:</dt>
+          <dd><bcp14>REQUIRED</bcp14>. A non-empty array of institution-assigned payee identifiers. Payees are fixed when the mandate is approved: a payee the customer saves later is not covered until the customer adds it to the mandate. An agent <bcp14>MUST NOT</bcp14> be able to add a payee.</dd>
+          <dt>approval:</dt>
+          <dd><bcp14>REQUIRED</bcp14>. The approval mode: <tt>every_payment</tt> (the customer approves each payment) or <tt>within_limits</tt> (payments inside the mandate proceed without approval).</dd>
+          <dt>limits:</dt>
+          <dd><t><bcp14>REQUIRED</bcp14>. An object with the following members. Amounts are objects with members <tt>amount</tt> (a decimal string with at most the number of fractional digits of the currency) and <tt>currency</tt> (an ISO 4217 alphabetic code). All amounts in one mandate <bcp14>MUST</bcp14> use the same currency.</t>
+            <dl>
+              <dt>per_payment:</dt><dd><bcp14>REQUIRED</bcp14>. The largest single payment. It <bcp14>MUST NOT</bcp14> exceed <tt>per_period.amount</tt>.</dd>
+              <dt>per_period:</dt><dd><bcp14>REQUIRED</bcp14>. An object with <tt>amount</tt> and <tt>currency</tt> (the most that may be paid in one period), <tt>count</tt> (an integer, the most payments in one period) and <tt>period</tt> (one of <tt>day</tt>, <tt>week</tt>, <tt>month</tt>). Periods are calendar periods in the time zone the institution publishes as <tt>payment_mandate_time_zone</tt> in its authorization server metadata <xref target="RFC8414"/>.</dd>
+              <dt>approve_above:</dt><dd><bcp14>OPTIONAL</bcp14>. With <tt>within_limits</tt>, payments above this amount need the customer's approval.</dd>
+            </dl>
+          </dd>
+          <dt>valid_until:</dt>
+          <dd><bcp14>OPTIONAL</bcp14>. An RFC 3339 <xref target="RFC3339"/> date-time after which the mandate covers no payment. The institution <bcp14>MAY</bcp14> impose a shorter maximum.</dd>
+          <dt>intent:</dt>
+          <dd><bcp14>OPTIONAL</bcp14>. A plain-language statement of what the mandate is for, at most 140 characters, for example "Pay my monthly utility bills". See <xref target="intent"/>.</dd>
+        </dl>
+        <t>An agent <bcp14>MAY</bcp14> send a <tt>payment_mandate</tt> in its authorization request with any members omitted or proposed. The values that apply are those the customer chooses during consent. The authorization server <bcp14>MUST</bcp14> return, and store, the authorization details as granted, which <bcp14>MAY</bcp14> be narrower than requested and <bcp14>MUST NOT</bcp14> be broader than what the customer chose (<xref target="RFC9396" section="7"/>).</t>
+      </section>
+
+      <section anchor="single-type">
+        <name>The single_payment Type</name>
+        <t>An authorization details object of type <tt>single_payment</tt> permits exactly one payment. It is offered by the institution when a payment falls outside a mandate (<xref target="signalling"/>); an agent <bcp14>MUST NOT</bcp14> construct one itself, and an institution <bcp14>MUST</bcp14> refuse an approval request for a <tt>single_payment</tt> it did not offer. Members:</t>
+        <dl>
+          <dt>from:</dt><dd><bcp14>REQUIRED</bcp14>. The debtor account identifier.</dd>
+          <dt>to:</dt><dd><bcp14>REQUIRED</bcp14>. An object with <tt>name</tt> and <tt>account</tt> of the payee.</dd>
+          <dt>amount:</dt><dd><bcp14>REQUIRED</bcp14>. The amount object.</dd>
+          <dt>reference:</dt><dd><bcp14>REQUIRED</bcp14>. The payment reference; may be empty.</dd>
+        </dl>
+        <t>The institution computes a digest over the JCS canonical form <xref target="RFC8785"/> of these members. An approval, and any token issued from it, is bound to that digest and to the held payment it was offered for. A payment whose digest differs <bcp14>MUST</bcp14> be refused.</t>
+      </section>
+
+      <section anchor="intent">
+        <name>Intent</name>
+        <t>The <tt>intent</tt> member records the purpose the customer confirmed. The agent <bcp14>MAY</bcp14> propose it; the consent screen <bcp14>MUST</bcp14> show it and <bcp14>SHOULD</bcp14> let the customer change it. It is informative: it does not widen or narrow what the mandate permits, and an institution <bcp14>MUST NOT</bcp14> base an authorization decision on it. It is recorded on receipts (<xref target="receipts"/>) as personal data (<xref target="personal"/>).</t>
+      </section>
+    </section>
+
+    <section anchor="evaluation">
+      <name>Mandate Evaluation</name>
+      <t>The resource server evaluates every payment request against the stored mandate after it has validated the access token, its sender constraint (for example DPoP <xref target="RFC9449"/>), and that the grant is active. Evaluation and, if the payment proceeds or is held, recording the held payment <bcp14>MUST</bcp14> be performed as one atomic operation per mandate, so that two concurrent payments cannot both be found within a limit that only one fits.</t>
+
+      <section anchor="counting">
+        <name>What Counts Against a Limit</name>
+        <t>For the period containing the request, the amount used and the count of payments used each include payments the institution has completed, payments it holds while its payment system has not confirmed or declined them, and payments the customer approved under a <tt>single_payment</tt>. A held payment <bcp14>MUST</bcp14> continue to count until the payment system confirms or declines it, or the institution has cancelled it and the payment system has confirmed the cancellation. It <bcp14>MUST NOT</bcp14> be released on a timer.</t>
+      </section>
+
+      <section anchor="reasons">
+        <name>Reasons, in Order</name>
+        <t>The resource server applies the following rules in order. The first rule the payment breaks determines the reason. If it breaks none, the payment is covered by the mandate.</t>
+        <table>
+          <name>Payment mandate reasons</name>
+          <thead><tr><th>Order</th><th>Reason</th><th>The payment...</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><tt>new_recipient</tt></td><td>is to an account that is not a saved payee of the customer</td></tr>
+            <tr><td>2</td><td><tt>payee_not_on_mandate</tt></td><td>is to a saved payee that is not in <tt>payees</tt></td></tr>
+            <tr><td>3</td><td><tt>over_per_payment</tt></td><td>is above <tt>limits.per_payment</tt></td></tr>
+            <tr><td>4</td><td><tt>over_period_count</tt></td><td>would exceed <tt>limits.per_period.count</tt></td></tr>
+            <tr><td>5</td><td><tt>over_period_limit</tt></td><td>would take the amount used above <tt>limits.per_period.amount</tt></td></tr>
+            <tr><td>6</td><td><tt>every_payment</tt></td><td>is under a mandate whose <tt>approval</tt> is <tt>every_payment</tt></td></tr>
+            <tr><td>7</td><td><tt>over_approval_threshold</tt></td><td>is above <tt>limits.approve_above</tt></td></tr>
+          </tbody>
+        </table>
+        <t>Reasons 1 to 5 are limits of the mandate; reasons 6 and 7 are the customer's choice to be asked. A payment from an account not in <tt>accounts</tt>, an expired mandate, or an action not granted is not a reason: it is refused with <tt>insufficient_authorization</tt> or the applicable error, and no approval is offered.</t>
+        <t>The fixed order means an agent receives the same reason from every institution for the same situation, and a customer is told the most fundamental problem first.</t>
+      </section>
+
+      <section anchor="outcomes">
+        <name>Outcomes</name>
+        <t>A covered payment proceeds. For a payment with a reason, the institution either:</t>
+        <ul>
+          <li>holds the payment and offers it for approval (<xref target="signalling"/>); or</li>
+          <li>refuses it, with the reason, without offering approval.</li>
+        </ul>
+        <t>An institution <bcp14>MAY</bcp14> refuse rather than offer approval for reasons 1 to 5, for example where the client's tier of assurance is low. It <bcp14>MUST</bcp14> offer approval, not refuse, for reasons 6 and 7. An approval <bcp14>MUST NOT</bcp14> add a payee, raise a limit or change the mandate. An approval given for reason 5 permits the period's limit to be exceeded by that one payment only.</t>
+      </section>
+    </section>
+
+    <section anchor="signalling">
+      <name>Signalling That Approval Is Needed</name>
+
+      <section anchor="with-challenge">
+        <name>With the Transaction Authorization Challenge</name>
+        <t>A resource server that implements <xref target="I-D.rosomakho-oauth-txn-challenge"/> responds with a transaction authorization challenge whose <tt>authorization_details</tt> contains the single <tt>single_payment</tt> it offers, and adds the claim:</t>
+        <dl>
+          <dt>mandate_reason:</dt><dd>The reason from <xref target="reasons"/>.</dd>
+        </dl>
+        <t>The challenge's <tt>reason</tt> claim <bcp14>SHOULD</bcp14> state the same reason in words the customer can understand, built by the institution from the payment itself and never from text supplied by the agent alone. The challenge's <tt>txn</tt> identifies the held payment.</t>
+      </section>
+
+      <section anchor="error-response">
+        <name>Without the Challenge</name>
+        <t>Otherwise, the resource server responds with HTTP status 403 and a JSON <xref target="RFC8259"/> body with these members:</t>
+        <dl>
+          <dt>error:</dt><dd><tt>approval_required</tt>.</dd>
+          <dt>error_description:</dt><dd>The reason in words.</dd>
+          <dt>reason:</dt><dd>The reason from <xref target="reasons"/>.</dd>
+          <dt>authorization_details:</dt><dd>An array containing the single <tt>single_payment</tt> offered.</dd>
+          <dt>payment_id:</dt><dd>The identifier of the held payment.</dd>
+        </dl>
+        <t>The agent requests the customer's approval for exactly that <tt>single_payment</tt>, for example with Client-Initiated Backchannel Authentication <xref target="CIBA"/>, and repeats the payment with the resulting token and the same idempotency key.</t>
+      </section>
+
+      <section anchor="approval-rules">
+        <name>Approval Rules</name>
+        <ul>
+          <li>The prompt shown to the customer <bcp14>MUST</bcp14> be built by the institution from the <tt>single_payment</tt>. Any text from the agent <bcp14>MUST</bcp14> be shown separately and labelled as the agent's words.</li>
+          <li>An approval and any token issued from it <bcp14>MUST</bcp14> be usable once, for the held payment it was offered for, and only before it expires. The institution <bcp14>MUST</bcp14> mark the approval used in the same atomic operation that moves the held payment to execution.</li>
+          <li>A payment completed under an approval counts against the mandate's period amount and count (<xref target="counting"/>).</li>
+        </ul>
+      </section>
+    </section>
+
+    <section anchor="receipts">
+      <name>Receipts</name>
+      <t>The institution records every decision on a payment request, whether covered, held, refused, approved, completed, declined, cancelled or of unknown outcome, as a receipt. Receipts are kept by the institution, not by the agent; the agent is never its own witness.</t>
+
+      <section anchor="receipt-members">
+        <name>Receipt Members</name>
+        <t>A receipt is a JSON object with these members. Members marked personal are carried as commitments (<xref target="personal"/>).</t>
+        <table>
+          <name>Receipt members</name>
+          <thead><tr><th>Member</th><th>Presence</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><tt>seq</tt></td><td>REQUIRED</td><td>Position in the chain, from 1</td></tr>
+            <tr><td><tt>prev</tt></td><td>REQUIRED</td><td>The <tt>hash</tt> of the previous receipt in the chain, or the genesis value</td></tr>
+            <tr><td><tt>time</tt></td><td>REQUIRED</td><td>RFC 3339 date-time with offset</td></tr>
+            <tr><td><tt>grant_id</tt></td><td>REQUIRED</td><td>The mandate's grant identifier</td></tr>
+            <tr><td><tt>mandate_version</tt></td><td>REQUIRED</td><td>The version of the mandate evaluated</td></tr>
+            <tr><td><tt>client_id</tt></td><td>REQUIRED</td><td>The agent</td></tr>
+            <tr><td><tt>action</tt></td><td>REQUIRED</td><td>For example <tt>payment</tt></td></tr>
+            <tr><td><tt>outcome</tt></td><td>REQUIRED</td><td>One of <tt>allowed</tt>, <tt>held</tt>, <tt>refused</tt>, <tt>failed</tt>, <tt>cancelled</tt>, <tt>unknown</tt></td></tr>
+            <tr><td><tt>basis</tt></td><td>REQUIRED</td><td><tt>mandate</tt> (covered), <tt>approval</tt> (the customer approved), or <tt>refused</tt></td></tr>
+            <tr><td><tt>reason</tt></td><td>When applicable</td><td>The reason from <xref target="reasons"/></td></tr>
+            <tr><td><tt>approval_id</tt></td><td>When applicable</td><td>The customer's approval</td></tr>
+            <tr><td><tt>payment_id</tt>, <tt>idempotency_key</tt>, <tt>institution_payment_id</tt></td><td>When applicable</td><td>Match the receipt to the agent's request and to the institution's payment record</td></tr>
+            <tr><td><tt>policy</tt></td><td>RECOMMENDED</td><td>Object with <tt>version</tt> and <tt>hash</tt> of the institution's policy in force</td></tr>
+            <tr><td><tt>intent</tt></td><td>When present, personal</td><td>The mandate's intent</td></tr>
+            <tr><td><tt>agent_instruction</tt></td><td>When supplied, personal</td><td>What the agent states it was asked to do, labelled as supplied by the agent. Never used to decide</td></tr>
+            <tr><td><tt>payment</tt></td><td>When applicable, personal</td><td>Payee name and account, amount, currency and reference</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section anchor="chain">
+        <name>Chaining and Signature</name>
+        <t>The <tt>hash</tt> of a receipt is the string <tt>sha256:</tt> followed by the lowercase hexadecimal SHA-256 digest of the JCS <xref target="RFC8785"/> serialisation of the receipt. The genesis value of <tt>prev</tt> is <tt>sha256:</tt> followed by 64 zeros. The institution signs each receipt with a JWS <xref target="RFC7515"/> whose payload is <tt>{"seq": ..., "hash": ...}</tt>, whose <tt>typ</tt> header is <tt>payment-receipt+jwt</tt>, and whose <tt>kid</tt> identifies a key published in the institution's JWK Set. Retired keys <bcp14>MUST</bcp14> remain published while receipts signed with them are retained.</t>
+        <t>An institution <bcp14>SHOULD</bcp14> keep one chain per mandate and <bcp14>SHOULD</bcp14> periodically publish each chain's head so that an operator or auditor can detect a truncated chain. Changing or deleting a receipt breaks every later link.</t>
+      </section>
+
+      <section anchor="personal">
+        <name>Personal Data Outside the Chain</name>
+        <t>Personal members are not written into the chained receipt. For each, the receipt carries, in a member <tt>personal</tt>, a commitment: <tt>sha256:</tt> followed by the hex SHA-256 digest of the JCS serialisation of <tt>{"salt": s, "value": v}</tt>, where <tt>s</tt> is at least 128 bits from a cryptographically secure random source, unique per member per receipt. The value and salt are stored separately and <bcp14>MAY</bcp14> be erased, for example to meet a data-subject request under <xref target="GDPR"/> or <xref target="POPIA"/>, without breaking the chain. A party given a value and its salt can check it against the receipt.</t>
+      </section>
+
+      <section anchor="disclosure">
+        <name>Disclosure</name>
+        <t>An institution <bcp14>SHOULD</bcp14> return the signed receipt, or its hash, in the response to each payment request, so the agent's operator holds a copy. For a dispute, the institution <bcp14>MAY</bcp14> disclose an evidence set: the receipts for the mandate, their signatures, the disclosed personal values with their salts, the policy documents named, and the public keys needed to verify them.</t>
+      </section>
+    </section>
+
+    <section anchor="security">
+      <name>Security Considerations</name>
+      <t>The security of the mandate depends on evaluation taking place at the institution, outside the agent. An agent driven by a language model can be manipulated by content it reads (indirect prompt injection); the rules in <xref target="evaluation"/> bound what such an agent can do regardless of what it is instructed to do. For the same reason, <tt>intent</tt> and <tt>agent_instruction</tt> are never inputs to an authorization decision.</t>
+      <t>Access tokens and approval tokens <bcp14>SHOULD</bcp14> be sender-constrained, for example with DPoP <xref target="RFC9449"/>, and the mandate <bcp14>SHOULD</bcp14> be bound to the agent's key when the customer approves it, so that a leaked token or grant identifier cannot be used by another client.</t>
+      <t>Without the atomicity required in <xref target="evaluation"/>, concurrent requests could each pass a limit only one fits under. Without counting held payments (<xref target="counting"/>), an agent could exceed a limit by sending payments faster than the payment system confirms them. Releasing a held payment on a timer would allow a payment that later completes to be paid twice against the limit.</t>
+      <t>A reason tells the agent which rule a payment broke. An agent could probe limits by sending payments and reading reasons. Institutions <bcp14>SHOULD</bcp14> rate-limit payment requests and approval requests, and limit the number of pending approvals per mandate, to prevent approval fatigue.</t>
+      <t>Receipts prove that a record was made by the institution's key and not altered afterwards. They do not by themselves prove that the customer understood what they approved, or allocate liability.</t>
+    </section>
+
+    <section anchor="privacy">
+      <name>Privacy Considerations</name>
+      <t>A mandate and its receipts describe a customer's financial relationships. The institution <bcp14>SHOULD</bcp14> use payee and account identifiers that are meaningful only within the institution, and a pairwise subject identifier per agent. The agent learns the reason a payment needs approval, which may reveal how much of a limit is used; this is inherent in telling the agent why, and the customer chose to share it with that agent.</t>
+      <t>Personal members of receipts are committed rather than recorded (<xref target="personal"/>) so that the institution can meet erasure and minimisation obligations while keeping a verifiable record. Salts prevent confirming a guessed value from the commitment alone.</t>
+    </section>
+
+    <section anchor="iana">
+      <name>IANA Considerations</name>
+
+      <section>
+        <name>OAuth Extensions Error Registry</name>
+        <t>This document requests registration of the following value in the "OAuth Extensions Error Registry" established by <xref target="RFC6749"/>:</t>
+        <dl>
+          <dt>Name:</dt><dd>approval_required</dd>
+          <dt>Usage Location:</dt><dd>resource access error response</dd>
+          <dt>Protocol Extension:</dt><dd>Payment mandates</dd>
+          <dt>Change controller:</dt><dd>IETF</dd>
+          <dt>Specification document:</dt><dd><xref target="error-response"/> of this document</dd>
+        </dl>
+      </section>
+
+      <section>
+        <name>OAuth Authorization Server Metadata</name>
+        <t>This document requests registration of the following value in the "OAuth Authorization Server Metadata" registry established by <xref target="RFC8414"/>:</t>
+        <dl>
+          <dt>Metadata Name:</dt><dd>payment_mandate_time_zone</dd>
+          <dt>Metadata Description:</dt><dd>IANA time zone name in which payment mandate periods are counted</dd>
+          <dt>Change Controller:</dt><dd>IETF</dd>
+          <dt>Specification Document:</dt><dd><xref target="mandate-type"/> of this document</dd>
+        </dl>
+      </section>
+
+      <section>
+        <name>Payment Mandate Reasons Registry</name>
+        <t>This document requests that IANA create a registry "Payment Mandate Reasons" with the registration policy Specification Required <xref target="RFC8126"/>. Each entry has a reason name, a position in the evaluation order, a description, and a reference. The initial contents are the reasons in <xref target="reasons"/>. A new reason <bcp14>MUST</bcp14> state where it falls in the order.</t>
+      </section>
+
+      <section>
+        <name>Media Type Registration</name>
+        <t>This document requests registration of the media type <tt>application/payment-receipt+jwt</tt> for signed receipts as defined in <xref target="chain"/>. Template details will be completed in a later revision.</t>
+      </section>
+    </section>
+  </middle>
+
+  <back>
+    <references>
+      <name>References</name>
+      <references>
+        <name>Normative References</name>
+        <reference anchor="RFC2119" target="https://www.rfc-editor.org/info/rfc2119">
+          <front><title>Key words for use in RFCs to Indicate Requirement Levels</title><author initials="S." surname="Bradner" fullname="S. Bradner"/><date year="1997" month="March"/></front>
+          <seriesInfo name="BCP" value="14"/><seriesInfo name="RFC" value="2119"/><seriesInfo name="DOI" value="10.17487/RFC2119"/>
+        </reference>
+        <reference anchor="RFC8174" target="https://www.rfc-editor.org/info/rfc8174">
+          <front><title>Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words</title><author initials="B." surname="Leiba" fullname="B. Leiba"/><date year="2017" month="May"/></front>
+          <seriesInfo name="BCP" value="14"/><seriesInfo name="RFC" value="8174"/><seriesInfo name="DOI" value="10.17487/RFC8174"/>
+        </reference>
+        <reference anchor="RFC3339" target="https://www.rfc-editor.org/info/rfc3339">
+          <front><title>Date and Time on the Internet: Timestamps</title><author initials="G." surname="Klyne" fullname="G. Klyne"/><author initials="C." surname="Newman" fullname="C. Newman"/><date year="2002" month="July"/></front>
+          <seriesInfo name="RFC" value="3339"/><seriesInfo name="DOI" value="10.17487/RFC3339"/>
+        </reference>
+        <reference anchor="RFC6749" target="https://www.rfc-editor.org/info/rfc6749">
+          <front><title>The OAuth 2.0 Authorization Framework</title><author initials="D." surname="Hardt" fullname="D. Hardt" role="editor"/><date year="2012" month="October"/></front>
+          <seriesInfo name="RFC" value="6749"/><seriesInfo name="DOI" value="10.17487/RFC6749"/>
+        </reference>
+        <reference anchor="RFC7515" target="https://www.rfc-editor.org/info/rfc7515">
+          <front><title>JSON Web Signature (JWS)</title><author initials="M." surname="Jones" fullname="M. Jones"/><author initials="J." surname="Bradley" fullname="J. Bradley"/><author initials="N." surname="Sakimura" fullname="N. Sakimura"/><date year="2015" month="May"/></front>
+          <seriesInfo name="RFC" value="7515"/><seriesInfo name="DOI" value="10.17487/RFC7515"/>
+        </reference>
+        <reference anchor="RFC8126" target="https://www.rfc-editor.org/info/rfc8126">
+          <front><title>Guidelines for Writing an IANA Considerations Section in RFCs</title><author initials="M." surname="Cotton" fullname="M. Cotton"/><author initials="B." surname="Leiba" fullname="B. Leiba"/><author initials="T." surname="Narten" fullname="T. Narten"/><date year="2017" month="June"/></front>
+          <seriesInfo name="BCP" value="26"/><seriesInfo name="RFC" value="8126"/><seriesInfo name="DOI" value="10.17487/RFC8126"/>
+        </reference>
+        <reference anchor="RFC8259" target="https://www.rfc-editor.org/info/rfc8259">
+          <front><title>The JavaScript Object Notation (JSON) Data Interchange Format</title><author initials="T." surname="Bray" fullname="T. Bray" role="editor"/><date year="2017" month="December"/></front>
+          <seriesInfo name="STD" value="90"/><seriesInfo name="RFC" value="8259"/><seriesInfo name="DOI" value="10.17487/RFC8259"/>
+        </reference>
+        <reference anchor="RFC8414" target="https://www.rfc-editor.org/info/rfc8414">
+          <front><title>OAuth 2.0 Authorization Server Metadata</title><author initials="M." surname="Jones" fullname="M. Jones"/><author initials="N." surname="Sakimura" fullname="N. Sakimura"/><author initials="J." surname="Bradley" fullname="J. Bradley"/><date year="2018" month="June"/></front>
+          <seriesInfo name="RFC" value="8414"/><seriesInfo name="DOI" value="10.17487/RFC8414"/>
+        </reference>
+        <reference anchor="RFC8785" target="https://www.rfc-editor.org/info/rfc8785">
+          <front><title>JSON Canonicalization Scheme (JCS)</title><author initials="A." surname="Rundgren" fullname="A. Rundgren"/><author initials="B." surname="Jordan" fullname="B. Jordan"/><author initials="S." surname="Erdtman" fullname="S. Erdtman"/><date year="2020" month="June"/></front>
+          <seriesInfo name="RFC" value="8785"/><seriesInfo name="DOI" value="10.17487/RFC8785"/>
+        </reference>
+        <reference anchor="RFC9396" target="https://www.rfc-editor.org/info/rfc9396">
+          <front><title>OAuth 2.0 Rich Authorization Requests</title><author initials="T." surname="Lodderstedt" fullname="T. Lodderstedt"/><author initials="J." surname="Richer" fullname="J. Richer"/><author initials="B." surname="Campbell" fullname="B. Campbell"/><date year="2023" month="May"/></front>
+          <seriesInfo name="RFC" value="9396"/><seriesInfo name="DOI" value="10.17487/RFC9396"/>
+        </reference>
+      </references>
+      <references>
+        <name>Informative References</name>
+        <reference anchor="RFC9449" target="https://www.rfc-editor.org/info/rfc9449">
+          <front><title>OAuth 2.0 Demonstrating Proof of Possession (DPoP)</title><author initials="D." surname="Fett" fullname="D. Fett"/><author initials="B." surname="Campbell" fullname="B. Campbell"/><author initials="J." surname="Bradley" fullname="J. Bradley"/><author initials="T." surname="Lodderstedt" fullname="T. Lodderstedt"/><author initials="M." surname="Jones" fullname="M. Jones"/><author initials="D." surname="Waite" fullname="D. Waite"/><date year="2023" month="September"/></front>
+          <seriesInfo name="RFC" value="9449"/><seriesInfo name="DOI" value="10.17487/RFC9449"/>
+        </reference>
+        <reference anchor="RFC7942" target="https://www.rfc-editor.org/info/rfc7942">
+          <front><title>Improving Awareness of Running Code: The Implementation Status Section</title><author initials="Y." surname="Sheffer" fullname="Y. Sheffer"/><author initials="A." surname="Farrel" fullname="A. Farrel"/><date year="2016" month="July"/></front>
+          <seriesInfo name="BCP" value="205"/><seriesInfo name="RFC" value="7942"/><seriesInfo name="DOI" value="10.17487/RFC7942"/>
+        </reference>
+        <reference anchor="I-D.rosomakho-oauth-txn-challenge" target="https://datatracker.ietf.org/doc/draft-rosomakho-oauth-txn-challenge/">
+          <front><title>OAuth Transaction Authorization Challenge</title><author initials="Y." surname="Rosomakho" fullname="Yaroslav Rosomakho"/><author initials="B." surname="Campbell" fullname="Brian Campbell"/><author initials="K." surname="McGuinness" fullname="Karl McGuinness"/><author initials="P." surname="Kasselman" fullname="Pieter Kasselman"/><date year="2026" month="June"/></front>
+          <seriesInfo name="Internet-Draft" value="draft-rosomakho-oauth-txn-challenge-00"/>
+        </reference>
+        <reference anchor="I-D.chen-oauth-agent-authz-use-cases" target="https://datatracker.ietf.org/doc/draft-chen-oauth-agent-authz-use-cases/">
+          <front><title>Agent Authorization use cases and gap analysis</title><author initials="M." surname="Chen" fullname="Meiling Chen"/><author initials="J." surname="Chen" fullname="Jia Chen"/><author initials="J." surname="Yao" fullname="Jiankang Yao"/><author initials="Y." surname="Jiang" fullname="Yuning Jiang"/><author initials="P." surname="Liu" fullname="Peter Chunchi Liu"/><date year="2026" month="October"/></front>
+          <seriesInfo name="Internet-Draft" value="draft-chen-oauth-agent-authz-use-cases-05"/>
+        </reference>
+        <reference anchor="CIBA" target="https://openid.net/specs/openid-client-initiated-backchannel-authentication-core-1_0.html">
+          <front><title>OpenID Connect Client-Initiated Backchannel Authentication Flow - Core 1.0</title><author initials="G." surname="Fernandez" fullname="G. Fernandez"/><author initials="F." surname="Walter" fullname="F. Walter"/><author initials="A." surname="Nennker" fullname="A. Nennker"/><author initials="D." surname="Tonge" fullname="D. Tonge"/><author initials="B." surname="Campbell" fullname="B. Campbell"/><date year="2021" month="September"/></front>
+        </reference>
+        <reference anchor="GDPR" target="https://eur-lex.europa.eu/eli/reg/2016/679/oj">
+          <front><title>Regulation (EU) 2016/679 (General Data Protection Regulation)</title><author><organization>European Parliament and Council of the European Union</organization></author><date year="2016" month="April"/></front>
+        </reference>
+        <reference anchor="POPIA" target="https://www.gov.za/documents/protection-personal-information-act">
+          <front><title>Protection of Personal Information Act 4 of 2013</title><author><organization>Republic of South Africa</organization></author><date year="2013" month="November"/></front>
+        </reference>
+      </references>
+    </references>
+
+    <section anchor="examples">
+      <name>Examples</name>
+      <t>A mandate as granted, as it appears in <tt>authorization_details</tt>:</t>
+      <sourcecode type="json"><![CDATA[
+{
+  "type": "payment_mandate",
+  "actions": ["pay_existing_beneficiary"],
+  "accounts": ["acc_4821"],
+  "payees": ["ben_water", "ben_city_power"],
+  "approval": "within_limits",
+  "limits": {
+    "per_payment": {"amount": "1000.00", "currency": "ZAR"},
+    "per_period": {"amount": "2000.00", "currency": "ZAR",
+                   "count": 4, "period": "month"},
+    "approve_above": {"amount": "500.00", "currency": "ZAR"}
+  },
+  "valid_until": "2027-02-15T23:59:59+02:00",
+  "intent": "Pay my monthly utility bills"
+}
+]]></sourcecode>
+      <t>A payment to a saved beneficiary that is not one of the mandate's payees, without the transaction challenge:</t>
+      <sourcecode type="http-message"><![CDATA[
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{
+  "error": "approval_required",
+  "error_description": "Sunrise Primary School is not one of the
+    payees you chose for this agent",
+  "reason": "payee_not_on_mandate",
+  "payment_id": "pi_8Qm2Lk",
+  "authorization_details": [{
+    "type": "single_payment",
+    "from": "acc_4821",
+    "to": {"name": "Sunrise Primary School", "account": "62114930"},
+    "amount": {"amount": "450.00", "currency": "ZAR"},
+    "reference": "Term 4"
+  }]
+}
+]]></sourcecode>
+      <t>The receipt for the payment once approved and completed:</t>
+      <sourcecode type="json"><![CDATA[
+{
+  "seq": 42, "prev": "sha256:9c1e...",
+  "time": "2026-11-17T10:42:07+02:00",
+  "grant_id": "g_3fa8", "mandate_version": 1, "client_id": "kaya",
+  "action": "payment", "outcome": "allowed", "basis": "approval",
+  "reason": "payee_not_on_mandate", "approval_id": "ar_51b0",
+  "payment_id": "pi_8Qm2Lk", "idempotency_key": "school-term4-2026",
+  "institution_payment_id": "bp_Jx41",
+  "policy": {"version": "CHG-2026-1182", "hash": "sha256:4be0..."},
+  "personal": {
+    "payment": "sha256:...",
+    "intent": "sha256:...",
+    "agent_instruction": "sha256:..."
+  }
+}
+]]></sourcecode>
+    </section>
+
+    <section anchor="impl-status" removeInRFC="true">
+      <name>Implementation Status</name>
+      <t>This section records the status of known implementations of the protocol defined by this specification at the time of posting of this Internet-Draft, and is based on a proposal described in <xref target="RFC7942"/>.</t>
+      <dl>
+        <dt>Organization:</dt><dd>Veridact Valet open-source project</dd>
+        <dt>Name:</dt><dd>Veridact Valet, https://github.com/richard-craig/veridact-valet</dd>
+        <dt>Description:</dt><dd>A reference authorization server, resource-server enforcement, approval flow (CIBA) and receipt log for agents acting on bank accounts, with a direct API (DPoP-bound) and an MCP gateway for AI assistants.</dd>
+        <dt>Maturity:</dt><dd>Proof of concept, with a conformance test suite for every reason in <xref target="reasons"/> and for the receipt format.</dd>
+        <dt>Coverage:</dt><dd>All of this document, under earlier type names (<tt>valet_payments</tt>, <tt>valet_payment_once</tt>) and with the approval mode values <tt>approved_payer</tt> and <tt>bill_payer</tt>. Payee details are not yet committed outside the chain (<xref target="personal"/>).</dd>
+        <dt>Licensing:</dt><dd>Apache-2.0</dd>
+        <dt>Contact:</dt><dd>Richard Craig, richard1gb@gmail.com</dd>
+      </dl>
+    </section>
+
+    <section anchor="acknowledgments" numbered="false">
+      <name>Acknowledgments</name>
+      <t>The approval challenge this document builds on is the work of the authors of <xref target="I-D.rosomakho-oauth-txn-challenge"/>.</t>
+    </section>
+  </back>
+</rfc>
