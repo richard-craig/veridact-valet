@@ -177,7 +177,7 @@ def test_the_consent_screen_names_the_verified_operator_and_a_suspended_assistan
         h.bank.known_assistants = KnownAssistants(ISSUER, {"claude": "claude"}, cache_seconds=0,
                                                   http=httpx.Client(transport=httpx.MockTransport(att.handler)))
         page = await h.browser.get("/handoff/consent", params={"ticket": ticket(client_id="claude")})
-        assert page.status_code == 200 and "operated by Anthropic PBC" in page.text and "checked with Veridact" in page.text
+        assert page.status_code == 200 and "operated by Anthropic PBC" in page.text and "Known assistant" in page.text and "not for this particular session" in page.text and "Verified by Veridact" not in page.text
         att.status = 2
         refused = await h.browser.get("/handoff/consent", params={"ticket": ticket(client_id="claude")})
         assert "Veridact has suspended Claude" in refused.text
