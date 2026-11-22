@@ -105,7 +105,11 @@ On the direct API (Lane B), the bank's API builds the same request from the HTTP
 | Needs the customer | `false` | `{"reason":"over_per_payment","evaluation_id":"…","access_request":{…},"valet":{"reservation":"r_…"}}` (see approvals below) |
 | Refused | `false` | `{"reason":"payee_not_on_mandate","evaluation_id":"…","valet":{"outcome":"declined","receipt":"…"}}` |
 
-- `context.reason` carries the draft's seven machine-readable reasons, in its fixed order. This is the same key
+- `context.reason` carries the seven machine-readable reasons of the [Valet profile](valet-profile.md) §3, in its
+  fixed order (`new_recipient`, `payee_not_on_mandate`, `over_per_payment`, `over_monthly_count`,
+  `over_monthly_limit`, `approved_payer`, `over_approval_threshold`). The Internet-Draft renames three of them
+  (`over_period_count`, `over_period_limit`, `every_payment`); the profile adopts the draft's names when it next
+  changes version, and until then Valet sends the profile's names. This is the same key
   the approval profile uses.
 - Everything else Valet-specific sits under `context.valet`. AuthZEN lets an enforcement point refuse a `true`
   decision whose context it does not understand, and Valet relies on that: an enforcement point that cannot read
@@ -257,7 +261,7 @@ COMMIT;
 ```
 
 - The two transactions queue on the mandate's lock. The first reserves R700; the second sees R300 left and gets
-  `approval_required` with reason `over_period_limit`.
+  `approval_required` with reason `over_monthly_limit`.
 - Only that one mandate is serialised. Every other customer's payments run in parallel.
 - **Held amounts count against the limit** (`reserved`, `sent`, `unknown`). Otherwise an agent could queue twenty
   "pending" payments to get around the monthly count.

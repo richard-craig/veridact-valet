@@ -170,7 +170,7 @@ The stronger the agent proves itself, the more it may do. The bearer tier does n
 
 ### Agent identity as a URL the vendor hosts
 
-Agent ecosystems are converging on one pattern: an agent identifies itself with an HTTPS URL that serves its metadata and signing keys. The Personal Agent Protocol (Poppy) does this, and Claude does it through Client ID Metadata Documents (CIMD), hosted by Anthropic. Veridact's `did:web` identities are the same pattern.
+Agent ecosystems are converging on one pattern: an agent identifies itself with an HTTPS URL that serves its metadata and signing keys. The Personal Agent Protocol (Poppy) does this, and Claude does it through Client ID Metadata Documents (CIMD), hosted by Anthropic. Veridact's `did:webvh` identities are the same pattern (Veridact specification v0.4).
 
 What CIMD proves, and what it doesn't:
 

@@ -497,7 +497,7 @@ The check just before a payment is sent stays, for the race where another node w
 
 ### 9.2 Vendor-hosted agent identity (CIMD), proposed
 
-Agent ecosystems identify an agent by an HTTPS URL serving its metadata and signing keys: the Personal Agent Protocol does this, Claude does it through Client ID Metadata Documents (CIMD) hosted by Anthropic, and Veridact's `did:web` identities follow the same pattern.
+Agent ecosystems identify an agent by an HTTPS URL serving its metadata and signing keys: the Personal Agent Protocol does this, Claude does it through Client ID Metadata Documents (CIMD) hosted by Anthropic, and Veridact's `did:webvh` identities follow the same pattern (Veridact specification v0.4).
 
 - **What CIMD proves:** the client ID is the platform's URL, and the authorisation code can only go to the platform's registered callback. **What it doesn't:** Claude's CIMD client authenticates as a public client (PKCE only), and it identifies the platform, not an individual agent. Claude uses CIMD only when the server metadata advertises `client_id_metadata_document_supported: true` and `none` in `token_endpoint_auth_methods_supported`.
 - **Proposed design:** a `CimdRegistry` behind the same `AgentRegistry` interface, accepting metadata URLs only from a bank-maintained allowlist, each with an assurance tier. Dynamic Client Registration stays off. Where a platform allows a client secret or key, the pre-registered confidential client remains preferred, because it adds client authentication at the token endpoint.
