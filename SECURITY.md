@@ -5,7 +5,8 @@ Valet is security software, so we take reports seriously, including reports abou
 ## Reporting a vulnerability
 
 Please report privately through GitHub: open the **Security** tab of this repository and choose
-**Report a vulnerability**. Do not open a public issue for a vulnerability.
+**Report a vulnerability**. If you can't use GitHub, email **security@veridact.net**. Do not open a public
+issue for a vulnerability.
 
 Include what you found, how to reproduce it, and what an attacker could do with it. If it is a design flaw
 (for example, a way for an agent to widen its own permission, reuse an approval, or forge a receipt), a short
