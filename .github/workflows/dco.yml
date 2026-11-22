@@ -8,6 +8,8 @@ permissions:
 
 jobs:
   signoff:
+    # Dependabot's commits cannot carry a DCO sign-off; its pull requests are still reviewed before merging.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
