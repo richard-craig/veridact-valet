@@ -64,6 +64,11 @@ class Bank:
         # The bank's policy in force: hashed, kept, and named on every receipt from here on (design section 8.2).
         self.policy = Policy(self.store, self.cfg, self.key_binding)
         self.receipts.policy = self.policy
+        # Set by create_app: the Valet decision service, and how the bank's MCP server reaches it.
+        self.decision_service: Any = None
+        self.decisions: Any = None
+        # Lane A: Veridact known-assistant entries for mainstream assistants (known_assistants.py), if configured.
+        self.known_assistants: Any = None
 
     # ------------------------------------------------- deployment safety
     def _key_binding_mode(self) -> str:
