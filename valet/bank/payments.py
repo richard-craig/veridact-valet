@@ -179,6 +179,36 @@ class Payments:
                     intent["id"])
         return self.get(intent["id"])
 
+    # ------------------------------------------------------------- reported by the bank's own server (decision service)
+    # In the sidecar shape (docs/decision-service.md) the bank's MCP server or API calls its own payment system and
+    # tells Valet what happened. These are the same transitions execute() makes, driven from outside.
+    def mark_sent(self, intent: dict[str, Any], grant: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        """reserved (or unknown_outcome, for a re-send) -> executing. Returns (intent, claimed): only the caller that
+        claimed it may hand the payment to the payment system. The denylist is checked again here."""
+        why = self.blocked(grant)
+        if why:
+            return self.cancel(intent, grant, why), False
+        claimed = self.store.x(f"UPDATE payment_intents SET status='executing', updated=? WHERE id=? AND status IN "
+                               f"('reserved','unknown_outcome')", time.time(), intent["id"]) == 1
+        return self.get(intent["id"]), claimed
+
+    def report_unknown(self, intent: dict[str, Any], grant: dict[str, Any], why: str = "") -> dict[str, Any]:
+        """The payment system did not answer: still held, never released on a timer."""
+        if self.store.x("UPDATE payment_intents SET status='unknown_outcome', reason=?, updated=? WHERE id=? AND "
+                        "status='executing'", why[:200] or "no answer from the bank's payment system", time.time(),
+                        intent["id"]) == 1:
+            self._receipt(intent, grant, "unknown", reason="the bank's payment system did not answer; held until reconciled")
+        return self.get(intent["id"])
+
+    def commit(self, intent: dict[str, Any], grant: dict[str, Any], bank_payment_id: str) -> dict[str, Any]:
+        return self.settle(intent, grant, CoreResult("paid", bank_payment_id))
+
+    def release(self, intent: dict[str, Any], grant: dict[str, Any], reason: str) -> dict[str, Any]:
+        """Never sent: cancelled at once. Sent: the bank declined it (or tombstoned it, reason 'cancelled')."""
+        if intent["status"] in ("approval_required", "reserved"):
+            return self.cancel(intent, grant, f"not sent: {reason}"[:200])
+        return self.settle(intent, grant, CoreResult("declined", None, reason))
+
     def cancel(self, intent: dict[str, Any], grant: dict[str, Any], why: str) -> dict[str, Any]:
         """Cancel a payment the bank has not accepted. Never sent: cancelled at once. Possibly sent: ask the bank to
         cancel-or-confirm, and release the hold only if it tombstones the instruction. Safe to call again."""

@@ -21,17 +21,5 @@ jobs:
       - run: pip install pip-audit
       - run: pip-audit -r requirements.txt -r requirements-cloud.txt --progress-spinner off
 
-  codeql:
-    name: Static analysis (CodeQL)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
-        with:
-          languages: python, java-kotlin
-          build-mode: none
-          queries: security-extended
-      - uses: github/codeql-action/analyze@v3
+# Static analysis: CodeQL runs through GitHub's default setup (Settings → Code security), which scans Python,
+# Actions and Java on every pull request. A CodeQL job here as well would be rejected while default setup is on.

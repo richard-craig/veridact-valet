@@ -11,16 +11,23 @@ import org.keycloak.provider.ProviderConfigProperty;
 import org.keycloak.representations.IDToken;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Puts the Valet grant id (recorded by ValetConsentAuthenticator) in the agent's access token as "valet_grant".
  * Refreshed tokens carry it too, because it lives in the user session. Valet's enforcement looks the grant up on
  * every call, so pause, revoke and limits apply to Keycloak's tokens exactly as to Valet's own.
+ *
+ * It also adds an RFC 8693 actor claim, "act": {"sub": "<client id>"}, so the token says in standard form that the
+ * client acts for the customer named in "sub" (delegation, not impersonation). The bank's MCP server checks that the
+ * actor is the client the token was issued to, and Valet records the actor on every receipt.
  */
 public class ValetGrantMapper extends AbstractOIDCProtocolMapper implements OIDCAccessTokenMapper {
     public static final String PROVIDER_ID = "valet-grant-mapper";
     public static final String CLAIM = "valet_grant";
+    public static final String ACTOR_CLAIM = "act";
     private static final List<ProviderConfigProperty> CONFIG = new ArrayList<>();
 
     static {
@@ -40,6 +47,9 @@ public class ValetGrantMapper extends AbstractOIDCProtocolMapper implements OIDC
         String grant = userSession.getNote(ValetConsentAuthenticator.grantNote(clientId));
         if (grant != null) {
             token.getOtherClaims().put(CLAIM, grant);
+            Map<String, Object> actor = new LinkedHashMap<>();
+            actor.put("sub", clientId);
+            token.getOtherClaims().put(ACTOR_CLAIM, actor);
         }
     }
 }

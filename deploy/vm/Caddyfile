@@ -1,6 +1,10 @@
 # HTTPS front door for a hosted demo: one subdomain per component, all on 443 (bank guest networks often block other
 # ports). Caddy gets Let's Encrypt certificates automatically; ports 80 and 443 must be reachable from the internet.
 {$BANK_HOST} {
+	# The Valet decision service answers only the bank's own servers. Its MCP server reaches it inside the container
+	# (127.0.0.1), so the internet never needs these paths. The AuthZEN metadata stays public.
+	@decision path /access/* /valet/v1/*
+	respond @decision "Not available" 403
 	reverse_proxy bank:8000
 }
 
@@ -20,4 +24,9 @@
 	}
 	respond @admin "Not available" 403
 	reverse_proxy keycloak:8080
+}
+
+{$VERIDACT_HOST} {
+	# Veridact's known-assistant attester (outside the bank in real life). Its admin page needs VERIDACT_ADMIN_SECRET.
+	reverse_proxy veridact:8100
 }

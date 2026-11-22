@@ -1,0 +1,2340 @@
+<!DOCTYPE html>
+<html lang="en" class="Internet-Draft">
+<head>
+<meta charset="utf-8">
+<meta content="Common,Latin" name="scripts">
+<meta content="initial-scale=1.0" name="viewport">
+<title>Rich Authorization Requests Profile for Agent Payment Mandates, Approval Reasons and Receipts</title>
+<meta content="Richard Craig" name="author">
+<meta content="
+       Software agents, including those driven by large language models, increasingly initiate payments on behalf of people. OAuth 2.0 Rich Authorization Requests (RFC 9396) can carry what such an agent may do, but there is no common way to express the limits that banks and their customers need, to tell an agent why a payment needs the customer's approval, or to keep an independent record of what was decided. 
+       This document defines two authorization details types for payment mandates (a standing mandate with named payees, per-payment and per-period limits and an approval mode, and a single approved payment); an ordered set of machine-readable reasons a payment falls outside a mandate; how those reasons are carried in an approval challenge, including the OAuth Transaction Authorization Challenge; and a signed, hash-chained receipt for every decision, with personal data kept outside the chain so it can be erased. 
+    " name="description">
+<meta content="xml2rfc 3.35.0" name="generator">
+<meta content="OAuth" name="keyword">
+<meta content="RAR" name="keyword">
+<meta content="AI agents" name="keyword">
+<meta content="payments" name="keyword">
+<meta content="mandate" name="keyword">
+<meta content="draft-craig-oauth-rar-payment-mandates-00" name="ietf.draft">
+<!-- Generator version information:
+  xml2rfc 3.35.0
+    Python 3.13.18
+    ConfigArgParse 1.10.1
+    google-i18n-address 3.1.1
+    intervaltree 3.2.1
+    Jinja2 3.1.6
+    lxml 6.1.3
+    natsort 8.4.0
+    platformdirs 4.13.5
+    pycountry 26.2.16
+    pypdf 6.17.0
+    PyYAML 6.0.3
+    requests 2.34.2
+    wcwidth 0.9.4
+-->
+<link href="draft-craig-oauth-rar-payment-mandates-00.xml" rel="alternate" type="application/rfc+xml">
+<link href="#copyright" rel="license">
+<style type="text/css">/*
+
+  NOTE: Changes at the bottom of this file overrides some earlier settings.
+
+  Once the style has stabilized and has been adopted as an official RFC style,
+  this can be consolidated so that style settings occur only in one place, but
+  for now the contents of this file consists first of the initial CSS work as
+  provided to the RFC Formatter (xml2rfc) work, followed by itemized and
+  commented changes found necessary during the development of the v3
+  formatters.
+
+*/
+
+/* fonts */
+@import url('https://static.ietf.org/fonts/noto-sans/import.css'); /* Sans-serif */
+@import url('https://static.ietf.org/fonts/noto-serif/import.css'); /* Serif (print) */
+@import url('https://static.ietf.org/fonts/roboto-mono/import.css'); /* Monospace */
+
+:root {
+  --font-sans: 'Noto Sans', Arial, Helvetica, sans-serif;
+  --font-serif: 'Noto Serif', 'Times', 'Times New Roman', serif;
+  --font-mono: 'Roboto Mono', Courier, 'Courier New', monospace;
+}
+
+@viewport {
+  zoom: 1.0;
+}
+@-ms-viewport {
+  width: extend-to-zoom;
+  zoom: 1.0;
+}
+/* general and mobile first */
+html {
+}
+body {
+  max-width: 90%;
+  margin: 1.5em auto;
+  color: #222;
+  background-color: #fff;
+  font-size: 14px;
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  scroll-behavior: smooth;
+  overflow-wrap: break-word;
+}
+.ears {
+  display: none;
+}
+
+/* headings */
+#title, h1, h2, h3, h4, h5, h6 {
+  margin: 1em 0 0.5em;
+  font-weight: bold;
+  line-height: 1.3;
+}
+#title {
+  clear: both;
+  border-bottom: 1px solid #ddd;
+  margin: 0 0 0.5em 0;
+  padding: 1em 0 0.5em;
+}
+.author {
+  padding-bottom: 4px;
+}
+h1 {
+  font-size: 26px;
+  margin: 1em 0;
+}
+h2 {
+  font-size: 22px;
+  margin-top: -20px;  /* provide offset for in-page anchors */
+  padding-top: 33px;
+}
+h3 {
+  font-size: 18px;
+  margin-top: -36px;  /* provide offset for in-page anchors */
+  padding-top: 42px;
+}
+h4 {
+  font-size: 16px;
+  margin-top: -36px;  /* provide offset for in-page anchors */
+  padding-top: 42px;
+}
+h5, h6 {
+  font-size: 14px;
+}
+#n-copyright-notice {
+  border-bottom: 1px solid #ddd;
+  padding-bottom: 1em;
+  margin-bottom: 1em;
+}
+/* general structure */
+p {
+  padding: 0;
+  margin: 0 0 1em 0;
+  text-align: left;
+}
+div, span {
+  position: relative;
+}
+div {
+  margin: 0;
+}
+.alignRight.art-text {
+  background-color: #f9f9f9;
+  border: 1px solid #eee;
+  border-radius: 3px;
+  padding: 1em 1em 0;
+  margin-bottom: 1.5em;
+}
+.alignRight.art-text pre {
+  padding: 0;
+}
+.alignRight {
+  margin: 1em 0;
+}
+.alignRight > *:first-child {
+  border: none;
+  margin: 0;
+  float: right;
+  clear: both;
+}
+.alignRight > *:nth-child(2) {
+  clear: both;
+  display: block;
+  border: none;
+}
+svg {
+  display: block;
+}
+@media print {
+  svg {
+    max-height: 850px;
+    max-width: 660px;
+  }
+}
+svg[font-family~="serif" i], svg [font-family~="serif" i] {
+  font-family: var(--font-serif);
+}
+svg[font-family~="sans-serif" i], svg [font-family~="sans-serif" i] {
+  font-family: var(--font-sans);
+}
+svg[font-family~="monospace" i], svg [font-family~="monospace" i] {
+  font-family: var(--font-mono);
+}
+.alignCenter.art-text {
+  background-color: #f9f9f9;
+  border: 1px solid #eee;
+  border-radius: 3px;
+  padding: 1em 1em 0;
+  margin-bottom: 1.5em;
+}
+.alignCenter.art-text pre {
+  padding: 0;
+}
+.alignCenter {
+  margin: 1em 0;
+}
+.alignCenter > *:first-child {
+  display: table;
+  border: none;
+  margin: 0 auto;
+}
+
+/* lists */
+ol, ul {
+  padding: 0;
+  margin: 0 0 1em 2em;
+}
+ol ol, ul ul, ol ul, ul ol {
+  margin-left: 1em;
+}
+li {
+  margin: 0 0 0.25em 0;
+}
+.ulCompact li {
+  margin: 0;
+}
+ul.empty, .ulEmpty {
+  list-style-type: none;
+}
+ul.empty li, .ulEmpty li {
+  margin-top: 0.5em;
+}
+ul.ulBare, li.ulBare {
+  margin-left: 0em !important;
+}
+ul.compact, .ulCompact,
+ol.compact, .olCompact {
+  line-height: 100%;
+  margin: 0 0 0 2em;
+}
+
+/* definition lists */
+dl {
+}
+dl > dt {
+  float: left;
+  margin-right: 1em;
+}
+/* 
+dl.nohang > dt {
+  float: none;
+}
+*/
+dl > dd {
+  margin-bottom: .8em;
+  min-height: 1.3em;
+}
+dl.compact > dd, .dlCompact > dd {
+  margin-bottom: 0em;
+}
+dl > dd > dl {
+  margin-top: 0.5em;
+  margin-bottom: 0em;
+}
+
+/* links */
+a {
+  text-decoration: none;
+}
+a[href] {
+  color: #22e; /* Arlen: WCAG 2019 */
+}
+a[href]:hover {
+  background-color: #f2f2f2;
+}
+figcaption a[href],
+a[href].selfRef {
+  color: #222;
+}
+/* XXX probably not this:
+a.selfRef:hover {
+  background-color: transparent;
+  cursor: default;
+} */
+
+/* Figures */
+tt, code, pre {
+  background-color: #f9f9f9;
+  font-family: var(--font-mono);
+}
+pre {
+  border: 1px solid #eee;
+  margin: 0;
+  padding: 1em;
+}
+img {
+  max-width: 100%;
+}
+figure {
+  margin: 0;
+}
+figure blockquote {
+  margin: 0.8em 0.4em 0.4em;
+}
+figcaption {
+  font-style: italic;
+  margin: 0 0 1em 0;
+}
+@media screen {
+  pre {
+    overflow-x: auto;
+    max-width: 100%;
+    max-width: calc(100% - 22px);
+  }
+}
+
+/* aside, blockquote */
+aside, blockquote {
+  margin-left: 0;
+  padding: 1.2em 2em;
+}
+blockquote {
+  background-color: #f9f9f9;
+  color: #111; /* Arlen: WCAG 2019 */
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  margin: 1em 0;
+}
+blockquote > *:last-child {
+  margin-bottom: 0;
+}
+cite {
+  display: block;
+  text-align: right;
+  font-style: italic;
+}
+.xref {
+  overflow-wrap: normal;
+}
+
+/* tables */
+table {
+  width: 100%;
+  margin: 0 0 1em;
+  border-collapse: collapse;
+  border: 1px solid #eee;
+}
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.5em 0.75em;
+}
+th {
+  text-align: left;
+  background-color: #e9e9e9;
+}
+tr:nth-child(2n+1) > td {
+  background-color: #f5f5f5;
+}
+table caption {
+  font-style: italic;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+table p {
+  /* XXX to avoid bottom margin on table row signifiers. If paragraphs should
+     be allowed within tables more generally, it would be far better to select on a class. */
+  margin: 0;
+}
+sub,
+sup {
+ white-space: nowrap;
+}
+
+/* pilcrow */
+a.pilcrow {
+  color: #666; /* Arlen: AHDJ 2019 */
+  text-decoration: none;
+  visibility: hidden;
+  user-select: none;
+  -ms-user-select: none;
+  -o-user-select:none;
+  -moz-user-select: none;
+  -khtml-user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+@media screen {
+  aside:hover > a.pilcrow,
+  p:hover > a.pilcrow,
+  blockquote:hover > a.pilcrow,
+  div:hover > a.pilcrow,
+  li:hover > a.pilcrow,
+  pre:hover > a.pilcrow {
+    visibility: visible;
+  }
+  a.pilcrow:hover {
+    background-color: transparent;
+  }
+}
+
+/* misc */
+hr {
+  border: 0;
+  border-top: 1px solid #eee;
+}
+.bcp14 {
+  font-variant: small-caps;
+}
+
+.role {
+  font-variant: all-small-caps;
+}
+
+/* info block */
+#identifiers {
+  margin: 0;
+  font-size: 0.9em;
+}
+#identifiers dt {
+  width: 3em;
+  clear: left;
+}
+#identifiers dd {
+  float: left;
+  margin-bottom: 0;
+}
+/* Fix PDF info block run off issue */
+@media print {
+  #identifiers dd {
+    max-width: 100%;
+  }
+}
+#identifiers .authors .author {
+  display: inline-block;
+  margin-right: 1.5em;
+}
+#identifiers .authors .org {
+  font-style: italic;
+}
+
+/* The prepared/rendered info at the very bottom of the page */
+.docInfo {
+  color: #666; /* Arlen: WCAG 2019 */
+  font-size: 0.9em;
+  font-style: italic;
+  margin-top: 2em;
+}
+.docInfo .prepared {
+  float: left;
+}
+.docInfo .prepared {
+  float: right;
+}
+
+/* table of contents */
+#toc  {
+  padding: 0.75em 0 2em 0;
+  margin-bottom: 1em;
+}
+nav.toc ul {
+  margin: 0 0.5em 0 0;
+  padding: 0;
+  list-style: none;
+}
+nav.toc li {
+  line-height: 1.3em;
+  margin: 0.75em 0;
+  padding-left: 1.2em;
+  text-indent: -1.2em;
+}
+/* references */
+.references dt {
+  text-align: right;
+  font-weight: bold;
+  min-width: 7em;
+}
+.references dd {
+  margin-left: 8em;
+  overflow: auto;
+}
+
+.refInstance {
+  margin-bottom: 1.25em;
+}
+
+.refSubseries {
+  margin-bottom: 1.25em;
+}
+
+.references .ascii {
+  margin-bottom: 0.25em;
+}
+
+/* index */
+.index ul {
+  margin: 0 0 0 1em;
+  padding: 0;
+  list-style: none;
+}
+.index ul ul {
+  margin: 0;
+}
+.index li {
+  margin: 0;
+  text-indent: -2em;
+  padding-left: 2em;
+  padding-bottom: 5px;
+}
+.indexIndex {
+  margin: 0.5em 0 1em;
+}
+.index a {
+  font-weight: 700;
+}
+/* make the index two-column on all but the smallest screens */
+@media (min-width: 600px) {
+  .index ul {
+    -moz-column-count: 2;
+    -moz-column-gap: 20px;
+  }
+  .index ul ul {
+    -moz-column-count: 1;
+    -moz-column-gap: 0;
+  }
+}
+
+/* authors */
+address.vcard {
+  font-style: normal;
+  margin: 1em 0;
+}
+
+address.vcard .nameRole {
+  font-weight: 700;
+  margin-left: 0;
+}
+address.vcard .label {
+  font-family: var(--font-sans);
+  margin: 0.5em 0;
+}
+address.vcard .type {
+  display: none;
+}
+.alternative-contact {
+  margin: 1.5em 0 1em;
+}
+hr.addr {
+  border-top: 1px dashed;
+  margin: 0;
+  color: #ddd;
+  max-width: calc(100% - 16px);
+}
+
+/* temporary notes */
+.rfcEditorRemove::before {
+  position: absolute;
+  top: 0.2em;
+  right: 0.2em;
+  padding: 0.2em;
+  content: "The RFC Editor will remove this note";
+  color: #9e2a00; /* Arlen: WCAG 2019 */
+  background-color: #ffd; /* Arlen: WCAG 2019 */
+}
+.rfcEditorRemove {
+  position: relative;
+  padding-top: 1.8em;
+  background-color: #ffd; /* Arlen: WCAG 2019 */
+  border-radius: 3px;
+}
+.cref {
+  background-color: #ffd; /* Arlen: WCAG 2019 */
+  padding: 2px 4px;
+}
+.crefSource {
+  font-style: italic;
+}
+/* alternative layout for smaller screens */
+@media screen and (max-width: 1023px) {
+  body {
+    padding-top: 2em;
+  }
+  #title {
+    padding: 1em 0;
+  }
+  h1 {
+    font-size: 24px;
+  }
+  h2 {
+    font-size: 20px;
+    margin-top: -18px;  /* provide offset for in-page anchors */
+    padding-top: 38px;
+  }
+  #identifiers dd {
+    max-width: 60%;
+  }
+  #toc {
+    position: fixed;
+    z-index: 2;
+    top: 0;
+    right: 0;
+    padding: 0;
+    margin: 0;
+    background-color: inherit;
+    border-bottom: 1px solid #ccc;
+  }
+  #toc h2 {
+    margin: -1px 0 0 0;
+    padding: 4px 0 4px 6px;
+    padding-right: 1em;
+    min-width: 190px;
+    font-size: 1.1em;
+    text-align: right;
+    background-color: #444;
+    color: white;
+    cursor: pointer;
+  }
+  #toc h2::before { /* css hamburger */
+    float: right;
+    position: relative;
+    width: 1em;
+    height: 1px;
+    left: -164px;
+    margin: 6px 0 0 0;
+    background: white none repeat scroll 0 0;
+    box-shadow: 0 4px 0 0 white, 0 8px 0 0 white;
+    content: "";
+  }
+  #toc nav {
+    display: none;
+    padding: 0.5em 1em 1em;
+    overflow: auto;
+    height: calc(100vh - 48px);
+    border-left: 1px solid #ddd;
+  }
+}
+
+/* alternative layout for wide screens */
+@media screen and (min-width: 1024px) {
+  body {
+    max-width: 724px;
+    margin: 42px auto;
+    padding-left: 1.5em;
+    padding-right: 29em;
+  }
+  #toc {
+    position: fixed;
+    top: 42px;
+    right: 42px;
+    width: 25%;
+    margin: 0;
+    padding: 0 1em;
+    z-index: 1;
+  }
+  #toc h2 {
+    border-top: none;
+    border-bottom: 1px solid #ddd;
+    font-size: 1em;
+    font-weight: normal;
+    margin: 0;
+    padding: 0.25em 1em 1em 0;
+  }
+  #toc nav {
+    display: block;
+    height: calc(90vh - 84px);
+    bottom: 0;
+    padding: 0.5em 0 0;
+    overflow: auto;
+  }
+  img { /* future proofing */
+    max-width: 100%;
+    height: auto;
+  }
+}
+
+/* pagination */
+@media print {
+  body {
+    width: 100%;
+  }
+  p {
+    orphans: 3;
+    widows: 3;
+  }
+  #n-copyright-notice {
+    border-bottom: none;
+  }
+  #toc, #n-introduction {
+    page-break-before: always;
+  }
+  #toc {
+    border-top: none;
+    padding-top: 0;
+  }
+  figure, pre {
+    page-break-inside: avoid;
+  }
+  figure {
+    overflow: scroll;
+  }
+  .breakable pre {
+    break-inside: auto;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+  }
+  h2+*, h3+*, h4+*, h5+*, h6+* {
+    page-break-before: avoid;
+  }
+  pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-size: 10pt;
+  }
+  table {
+    border: 1px solid #ddd;
+  }
+  td {
+    border-top: 1px solid #ddd;
+  }
+}
+
+/* This is commented out here, as the string-set: doesn't
+   pass W3C validation currently */
+/*
+.ears thead .left {
+  string-set: ears-top-left content();
+}
+
+.ears thead .center {
+  string-set: ears-top-center content();
+}
+
+.ears thead .right {
+  string-set: ears-top-right content();
+}
+
+.ears tfoot .left {
+  string-set: ears-bottom-left content();
+}
+
+.ears tfoot .center {
+  string-set: ears-bottom-center content();
+}
+
+.ears tfoot .right {
+  string-set: ears-bottom-right content();
+}
+*/
+
+@page :first {
+  padding-top: 0;
+  @top-left {
+    content: normal;
+    border: none;
+  }
+  @top-center {
+    content: normal;
+    border: none;
+  }
+  @top-right {
+    content: normal;
+    border: none;
+  }
+}
+
+@page {
+  size: A4;
+  margin-bottom: 45mm;
+  padding-top: 20px;
+  /* The following is commented out here, but set appropriately by in code, as
+     the content depends on the document */
+  /*
+  @top-left {
+    content: 'Internet-Draft';
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @top-left {
+    content: string(ears-top-left);
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @top-center {
+    content: string(ears-top-center);
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @top-right {
+    content: string(ears-top-right);
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @bottom-left {
+    content: string(ears-bottom-left);
+    vertical-align: top;
+    border-top: solid 1px #ccc;
+  }
+  @bottom-center {
+    content: string(ears-bottom-center);
+    vertical-align: top;
+    border-top: solid 1px #ccc;
+  }
+  @bottom-right {
+      content: '[Page ' counter(page) ']';
+      vertical-align: top;
+      border-top: solid 1px #ccc;
+  }
+  */
+
+}
+
+/* Changes introduced to fix issues found during implementation */
+/* Make sure links are clickable even if overlapped by following H* */
+a {
+  z-index: 2;
+}
+/* Separate body from document info even without intervening H1 */
+section {
+  clear: both;
+}
+
+
+/* Top align author divs, to avoid names without organization dropping level with org names */
+.author {
+  vertical-align: top;
+}
+
+/* Leave room in document info to show Internet-Draft on one line */
+#identifiers dt {
+  width: 8em;
+}
+
+/* Don't waste quite as much whitespace between label and value in doc info */
+#identifiers dd {
+  margin-left: 1em;
+}
+
+/* Give floating toc a background color (needed when it's a div inside section */
+#toc {
+  background-color: white;
+}
+
+/* Make the collapsed ToC header render white on gray also when it's a link */
+@media screen and (max-width: 1023px) {
+  #toc h2 a,
+  #toc h2 a:link,
+  #toc h2 a:focus,
+  #toc h2 a:hover,
+  #toc a.toplink,
+  #toc a.toplink:hover {
+    color: white;
+    background-color: #444;
+    text-decoration: none;
+  }
+}
+
+/* Give the bottom of the ToC some whitespace */
+@media screen and (min-width: 1024px) {
+  #toc {
+    padding: 0 0 1em 1em;
+  }
+}
+
+/* Style section numbers with more space between number and title */
+.section-number {
+  padding-right: 0.5em;
+}
+
+/* prevent monospace from becoming overly large */
+tt, code, pre {
+  font-size: 95%;
+}
+
+/* Fix the height/width aspect for ascii art*/
+.sourcecode pre,
+.art-text pre {
+  line-height: 1.12;
+}
+
+
+/* Add styling for a link in the ToC that points to the top of the document */
+a.toplink {
+  float: right;
+  margin-right: 0.5em;
+}
+
+/* Fix the dl styling to match the RFC 7992 attributes */
+dl > dt,
+dl.dlParallel > dt {
+  float: left;
+  margin-right: 1em;
+}
+dl.dlNewline > dt {
+  float: none;
+}
+
+/* Provide styling for table cell text alignment */
+table td.text-left,
+table th.text-left {
+  text-align: left;
+}
+table td.text-center,
+table th.text-center {
+  text-align: center;
+}
+table td.text-right,
+table th.text-right {
+  text-align: right;
+}
+
+/* Make the alternative author contact information look less like just another
+   author, and group it closer with the primary author contact information */
+.alternative-contact {
+  margin: 0.5em 0 0.25em 0;
+}
+address .non-ascii {
+  margin: 0 0 0 2em;
+}
+
+/* With it being possible to set tables with alignment
+  left, center, and right, { width: 100%; } does not make sense */
+table {
+  width: auto;
+}
+
+/* Avoid reference text that sits in a block with very wide left margin,
+   because of a long floating dt label.*/
+.references dd {
+  overflow: visible;
+}
+
+/* Control caption placement */
+caption {
+  caption-side: bottom;
+}
+
+/* Limit the width of the author address vcard, so names in right-to-left
+   script don't end up on the other side of the page. */
+
+address.vcard {
+  max-width: 30em;
+  margin-right: auto;
+}
+
+/* For address alignment dependent on LTR or RTL scripts */
+address div.left {
+  text-align: left;
+}
+address div.right {
+  text-align: right;
+}
+
+/* Provide table alignment support.  We can't use the alignX classes above
+   since they do unwanted things with caption and other styling. */
+table.right {
+ margin-left: auto;
+ margin-right: 0;
+}
+table.center {
+ margin-left: auto;
+ margin-right: auto;
+}
+table.left {
+ margin-left: 0;
+ margin-right: auto;
+}
+
+/* Give the table caption label the same styling as the figcaption */
+caption a[href] {
+  color: #222;
+}
+
+@media print {
+  .toplink {
+    display: none;
+  }
+
+  /* avoid overwriting the top border line with the ToC header */
+  #toc {
+    padding-top: 1px;
+  }
+
+  /* Avoid page breaks inside dl and author address entries */
+  .vcard {
+    page-break-inside: avoid;
+  }
+
+}
+/* Tweak the bcp14 keyword presentation */
+.bcp14 {
+  font-variant: small-caps;
+  font-weight: bold;
+  font-size: 0.9em;
+}
+/* Tweak the invisible space above H* in order not to overlay links in text above */
+ h2 {
+  margin-top: -18px;  /* provide offset for in-page anchors */
+  padding-top: 31px;
+ }
+ h3 {
+  margin-top: -18px;  /* provide offset for in-page anchors */
+  padding-top: 24px;
+ }
+ h4 {
+  margin-top: -18px;  /* provide offset for in-page anchors */
+  padding-top: 24px;
+ }
+/* Float artwork pilcrow to the right */
+@media screen {
+  .artwork a.pilcrow {
+    display: block;
+    line-height: 0.7;
+    margin-top: 0.15em;
+  }
+}
+/* Make pilcrows on dd visible */
+@media screen {
+  dd:hover > a.pilcrow {
+    visibility: visible;
+  }
+}
+/* Make the placement of figcaption match that of a table's caption
+   by removing the figure's added bottom margin */
+.alignLeft.art-text,
+.alignCenter.art-text,
+.alignRight.art-text {
+   margin-bottom: 0;
+}
+.alignLeft,
+.alignCenter,
+.alignRight {
+  margin: 1em 0 0 0;
+}
+/* In print, the pilcrow won't show on hover, so prevent it from taking up space,
+   possibly even requiring a new line */
+@media print {
+  a.pilcrow {
+    display: none;
+  }
+}
+/* Styling for the external metadata */
+div#external-metadata {
+  background-color: #eee;
+  padding: 0.5em;
+  margin-bottom: 0.5em;
+  display: none;
+}
+div#internal-metadata {
+  padding: 0.5em;                       /* to match the external-metadata padding */
+}
+/* Styling for title RFC Number */
+h1#rfcnum {
+  clear: both;
+  margin: 0 0 -1em;
+  padding: 1em 0 0 0;
+}
+/* Make .olPercent look the same as <ol><li> */
+dl.olPercent > dd {
+  margin-bottom: 0.25em;
+  min-height: initial;
+}
+/* Give aside some styling to set it apart */
+aside {
+  border-left: 1px solid #ddd;
+  margin: 1em 0 1em 2em;
+  padding: 0.2em 2em;
+}
+aside > dl,
+aside > ol,
+aside > ul,
+aside > table,
+aside > p {
+  margin-bottom: 0.5em;
+}
+/* Additional page break settings */
+@media print {
+  figcaption, table caption {
+    page-break-before: avoid;
+  }
+  table {
+    page-break-inside: avoid;
+  }
+}
+/* Font size adjustments for print */
+@media print {
+  body  { font-size: 10pt;      line-height: normal; max-width: 96%; }
+  h1    { font-size: 1.72em;    padding-top: 1.5em; } /* 1*1.2*1.2*1.2 */
+  h2    { font-size: 1.44em;    padding-top: 1.5em; } /* 1*1.2*1.2 */
+  h3    { font-size: 1.2em;     padding-top: 1.5em; } /* 1*1.2 */
+  h4    { font-size: 1em;       padding-top: 1.5em; }
+  h5, h6 { font-size: 1em;      margin: initial; padding: 0.5em 0 0.3em; }
+}
+/* Sourcecode margin in print, when there's no pilcrow */
+@media print {
+  .artwork,
+  .artwork > pre,
+  .sourcecode {
+    margin-bottom: 1em;
+  }
+}
+/* Avoid narrow tables forcing too narrow table captions, which may render badly */
+table {
+  min-width: 20em;
+}
+/* ol type a */
+ol.type-a { list-style-type: lower-alpha; }
+ol.type-A { list-style-type: upper-alpha; }
+ol.type-i { list-style-type: lower-roman; }
+ol.type-I { list-style-type: upper-roman; }
+/* Apply the print table and row borders in general, on request from the RPC,
+and increase the contrast between border and odd row background slightly */
+table {
+  border: 1px solid #ddd;
+}
+td {
+  border-top: 1px solid #ddd;
+}
+tr {
+  break-inside: avoid;
+}
+tr:nth-child(2n+1) > td {
+  background-color: #f8f8f8;
+}
+/* Use style rules to govern display of the TOC. */
+@media screen and (max-width: 1023px) {
+  #toc nav { display: none; }
+  #toc.active nav { display: block; }
+}
+/* Add support for keepWithNext */
+.keepWithNext {
+  break-after: avoid-page;
+  break-after: avoid-page;
+}
+/* Add support for keepWithPrevious */
+.keepWithPrevious {
+  break-before: avoid-page;
+}
+/* Change the approach to avoiding breaks inside artwork etc. */
+figure, pre, table, .artwork, .sourcecode  {
+  break-before: auto;
+  break-after: auto;
+}
+/* Avoid breaks between <dt> and <dd> */
+dl {
+  break-before: auto;
+  break-inside: auto;
+}
+dt {
+  break-before: auto;
+  break-after: avoid-page;
+}
+dd {
+  break-before: avoid-page;
+  break-after: auto;
+  orphans: 3;
+  widows: 3
+}
+span.break, dd.break {
+  margin-bottom: 0;
+  min-height: 0;
+  break-before: auto;
+  break-inside: auto;
+  break-after: auto;
+}
+/* Undo break-before ToC */
+@media print {
+  #toc {
+    break-before: auto;
+  }
+}
+/* Text in compact lists should not get extra bottom margin space,
+   since that would makes the list not compact */
+ul.compact p, .ulCompact p,
+ol.compact p, .olCompact p {
+ margin: 0;
+}
+/* But the list as a whole needs the extra space at the end */
+section ul.compact,
+section .ulCompact,
+section ol.compact,
+section .olCompact {
+  margin-bottom: 1em;                    /* same as p not within ul.compact etc. */
+}
+/* The tt and code background above interferes with for instance table cell
+   backgrounds.  Changed to something a bit more selective. */
+tt, code {
+  background-color: transparent;
+}
+p tt, p code, li tt, li code, dt tt, dt code {
+  background-color: #f8f8f8;
+}
+/* Tweak the pre margin -- 0px doesn't come out well */
+pre {
+   margin-top: 0.5px;
+}
+/* Tweak the compact list text */
+ul.compact, .ulCompact,
+ol.compact, .olCompact,
+dl.compact, .dlCompact {
+  line-height: normal;
+}
+/* Don't add top margin for nested lists */
+li > ul, li > ol, li > dl,
+dd > ul, dd > ol, dd > dl,
+dl > dd > dl {
+  margin-top: initial;
+}
+/* Elements that should not be rendered on the same line as a <dt> */
+/* This should match the element list in writer.text.TextWriter.render_dl() */
+dd > div.artwork:first-child,
+dd > aside:first-child,
+dd > blockquote:first-child,
+dd > figure:first-child,
+dd > ol:first-child,
+dd > div.sourcecode:first-child,
+dd > table:first-child,
+dd > ul:first-child {
+  clear: left;
+}
+/* fix for weird browser behaviour when <dd/> is empty */
+dt+dd:empty::before{
+  content: "\00a0";
+}
+/* Make paragraph spacing inside <li> smaller than in body text, to fit better within the list */
+li > p {
+  margin-bottom: 0.5em
+}
+/* Don't let p margin spill out from inside list items */
+li > p:last-of-type:only-child {
+  margin-bottom: 0;
+}
+</style>
+<link href="rfc-local.css" rel="stylesheet" type="text/css">
+<script type="application/javascript">async function addMetadata(){try{const e=document.styleSheets[0].cssRules;for(let t=0;t<e.length;t++)if(/#identifiers/.exec(e[t].selectorText)){const a=e[t].cssText.replace("#identifiers","#external-updates");document.styleSheets[0].insertRule(a,document.styleSheets[0].cssRules.length)}}catch(e){console.log(e)}const e=document.getElementById("external-metadata");if(e)try{var t,a="",o=function(e){const t=document.getElementsByTagName("meta");for(let a=0;a<t.length;a++)if(t[a].getAttribute("name")===e)return t[a].getAttribute("content");return""}("rfc.number");if(o){t="https://www.rfc-editor.org/rfc/rfc"+o+".json";try{const e=await fetch(t);a=await e.json()}catch(e){t=document.URL.indexOf("html")>=0?document.URL.replace(/html$/,"json"):document.URL+".json";const o=await fetch(t);a=await o.json()}}if(!a)return;e.style.display="block";const s="",d="https://datatracker.ietf.org/doc",n="https://datatracker.ietf.org/ipr/search",c="https://www.rfc-editor.org/info",l=a.doc_id.toLowerCase(),i=a.doc_id.slice(0,3).toLowerCase(),f=a.doc_id.slice(3).replace(/^0+/,""),u={status:"Status",obsoletes:"Obsoletes",obsoleted_by:"Obsoleted By",updates:"Updates",updated_by:"Updated By",see_also:"See Also",errata_url:"Errata"};let h="<dl style='overflow:hidden' id='external-updates'>";["status","obsoletes","obsoleted_by","updates","updated_by","see_also","errata_url"].forEach(e=>{if("status"==e){a[e]=a[e].toLowerCase();var t=a[e].split(" "),o=t.length,w="",p=1;for(let e=0;e<o;e++)p<o?w=w+r(t[e])+" ":w+=r(t[e]),p++;a[e]=w}else if("obsoletes"==e||"obsoleted_by"==e||"updates"==e||"updated_by"==e){var g,m="",b=1;g=a[e].length;for(let t=0;t<g;t++)a[e][t]&&(a[e][t]=String(a[e][t]).toLowerCase(),m=b<g?m+"<a href='"+s+"/rfc/".concat(a[e][t])+"'>"+a[e][t].slice(3)+"</a>, ":m+"<a href='"+s+"/rfc/".concat(a[e][t])+"'>"+a[e][t].slice(3)+"</a>",b++);a[e]=m}else if("see_also"==e){var y,L="",C=1;y=a[e].length;for(let t=0;t<y;t++)if(a[e][t]){a[e][t]=String(a[e][t]);var _=a[e][t].slice(0,3),v=a[e][t].slice(3).replace(/^0+/,"");L=C<y?"RFC"!=_?L+"<a href='"+s+"/info/"+_.toLowerCase().concat(v.toLowerCase())+"'>"+_+" "+v+"</a>, ":L+"<a href='"+s+"/info/"+_.toLowerCase().concat(v.toLowerCase())+"'>"+v+"</a>, ":"RFC"!=_?L+"<a href='"+s+"/info/"+_.toLowerCase().concat(v.toLowerCase())+"'>"+_+" "+v+"</a>":L+"<a href='"+s+"/info/"+_.toLowerCase().concat(v.toLowerCase())+"'>"+v+"</a>",C++}a[e]=L}else if("errata_url"==e){var R="";R=a[e]?R+"<a href='"+a[e]+"'>Errata exist</a> | <a href='"+d+"/"+l+"'>Datatracker</a>| <a href='"+n+"/?"+i+"="+f+"&submit="+i+"'>IPR</a> | <a href='"+c+"/"+l+"'>Info page</a>":"<a href='"+d+"/"+l+"'>Datatracker</a> | <a href='"+n+"/?"+i+"="+f+"&submit="+i+"'>IPR</a> | <a href='"+c+"/"+l+"'>Info page</a>",a[e]=R}""!=a[e]?"Errata"==u[e]?h+=`<dt>More info:</dt><dd>${a[e]}</dd>`:h+=`<dt>${u[e]}:</dt><dd>${a[e]}</dd>`:"Errata"==u[e]&&(h+=`<dt>More info:</dt><dd>${a[e]}</dd>`)}),h+="</dl>",e.innerHTML=h}catch(e){console.log(e)}else console.log("Could not locate metadata <div> element");function r(e){return e.charAt(0).toUpperCase()+e.slice(1)}}window.removeEventListener("load",addMetadata),window.addEventListener("load",addMetadata);</script>
+</head>
+<body class="xml2rfc">
+<table class="ears">
+<thead><tr>
+<td class="left">Internet-Draft</td>
+<td class="center">RAR Payment Mandates</td>
+<td class="right">November 2026</td>
+</tr></thead>
+<tfoot><tr>
+<td class="left">Craig</td>
+<td class="center">Expires 21 May 2027</td>
+<td class="right">[Page]</td>
+</tr></tfoot>
+</table>
+<div id="external-metadata" class="document-information"></div>
+<div id="internal-metadata" class="document-information">
+<dl id="identifiers">
+<dt class="label-workgroup">Workgroup:</dt>
+<dd class="workgroup">Web Authorization Protocol</dd>
+<dt class="label-internet-draft">Internet-Draft:</dt>
+<dd class="internet-draft">draft-craig-oauth-rar-payment-mandates-00</dd>
+<dt class="label-published">Published:</dt>
+<dd class="published">
+<time datetime="2026-11-17" class="published">17 November 2026</time>
+    </dd>
+<dt class="label-intended-status">Intended Status:</dt>
+<dd class="intended-status">Standards Track</dd>
+<dt class="label-expires">Expires:</dt>
+<dd class="expires"><time datetime="2027-05-21">21 May 2027</time></dd>
+<dt class="label-authors">Author:</dt>
+<dd class="authors">
+<div class="author">
+      <div class="author-name">R. Craig</div>
+<div class="org">Independent</div>
+</div>
+</dd>
+</dl>
+</div>
+<h1 id="title">Rich Authorization Requests Profile for Agent Payment Mandates, Approval Reasons and Receipts</h1>
+<section id="section-abstract">
+      <h2 id="abstract"><a href="#abstract" class="selfRef">Abstract</a></h2>
+<p id="section-abstract-1">Software agents, including those driven by large language models, increasingly initiate payments on behalf of people. OAuth 2.0 Rich Authorization Requests (RFC 9396) can carry what such an agent may do, but there is no common way to express the limits that banks and their customers need, to tell an agent why a payment needs the customer's approval, or to keep an independent record of what was decided.<a href="#section-abstract-1" class="pilcrow">¶</a></p>
+<p id="section-abstract-2">This document defines two authorization details types for payment mandates (a standing mandate with named payees, per-payment and per-period limits and an approval mode, and a single approved payment); an ordered set of machine-readable reasons a payment falls outside a mandate; how those reasons are carried in an approval challenge, including the OAuth Transaction Authorization Challenge; and a signed, hash-chained receipt for every decision, with personal data kept outside the chain so it can be erased.<a href="#section-abstract-2" class="pilcrow">¶</a></p>
+</section>
+<section class="note rfcEditorRemove" id="section-note.1">
+      <h2 id="name-about-this-document">
+<a href="#name-about-this-document" class="section-name selfRef">About This Document</a>
+      </h2>
+<p id="section-note.1-1">This note is to be removed before publishing as an RFC.<a href="#section-note.1-1" class="pilcrow">¶</a></p>
+<p id="section-note.1-2">Discussion of this document takes place on the Web Authorization Protocol Working Group mailing list (oauth@ietf.org).<a href="#section-note.1-2" class="pilcrow">¶</a></p>
+<p id="section-note.1-3">An open-source implementation (Apache-2.0) is described in <a href="#impl-status" class="auto internal xref">Appendix B</a>.<a href="#section-note.1-3" class="pilcrow">¶</a></p>
+</section>
+<div id="status-of-memo">
+<section id="section-boilerplate.1">
+        <h2 id="name-status-of-this-memo">
+<a href="#name-status-of-this-memo" class="section-name selfRef">Status of This Memo</a>
+        </h2>
+<p id="section-boilerplate.1-1">
+        This Internet-Draft is submitted in full conformance with the
+        provisions of BCP 78 and BCP 79.<a href="#section-boilerplate.1-1" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.1-2">
+        Internet-Drafts are working documents of the Internet Engineering Task
+        Force (IETF). Note that other groups may also distribute working
+        documents as Internet-Drafts. The list of current Internet-Drafts is
+        at <span><a href="https://datatracker.ietf.org/drafts/current/">https://datatracker.ietf.org/drafts/current/</a></span>.<a href="#section-boilerplate.1-2" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.1-3">
+        Internet-Drafts are draft documents valid for a maximum of six months
+        and may be updated, replaced, or obsoleted by other documents at any
+        time. It is inappropriate to use Internet-Drafts as reference
+        material or to cite them other than as "work in progress."<a href="#section-boilerplate.1-3" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.1-4">
+        This Internet-Draft will expire on 21 May 2027.<a href="#section-boilerplate.1-4" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="copyright">
+<section id="section-boilerplate.2">
+        <h2 id="name-copyright-notice">
+<a href="#name-copyright-notice" class="section-name selfRef">Copyright Notice</a>
+        </h2>
+<p id="section-boilerplate.2-1">
+            Copyright (c) 2026 IETF Trust and the persons identified as the
+            document authors. All rights reserved.<a href="#section-boilerplate.2-1" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.2-2">
+            This document is subject to BCP 78 and the IETF Trust's Legal
+            Provisions Relating to IETF Documents
+            (<span><a href="https://trustee.ietf.org/license-info">https://trustee.ietf.org/license-info</a></span>) in effect on the date of
+            publication of this document. Please review these documents
+            carefully, as they describe your rights and restrictions with
+            respect to this document. Code Components extracted from this
+            document must include Revised BSD License text as described in
+            Section 4.e of the Trust Legal Provisions and are provided without
+            warranty as described in the Revised BSD License.<a href="#section-boilerplate.2-2" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="toc">
+<section id="section-toc.1">
+        <a href="#" onclick="scroll(0,0)" class="toplink">▲</a><h2 id="name-table-of-contents">
+<a href="#name-table-of-contents" class="section-name selfRef">Table of Contents</a>
+        </h2>
+<nav class="toc"><ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1">
+            <p id="section-toc.1-1.1.1"><a href="#section-1" class="auto internal xref">1</a>.  <a href="#name-introduction" class="internal xref">Introduction</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1.2.1">
+                <p id="section-toc.1-1.1.2.1.1" class="keepWithNext"><a href="#section-1.1" class="auto internal xref">1.1</a>.  <a href="#name-scope" class="internal xref">Scope</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1.2.2">
+                <p id="section-toc.1-1.1.2.2.1" class="keepWithNext"><a href="#section-1.2" class="auto internal xref">1.2</a>.  <a href="#name-requirements-language" class="internal xref">Requirements Language</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1.2.3">
+                <p id="section-toc.1-1.1.2.3.1" class="keepWithNext"><a href="#section-1.3" class="auto internal xref">1.3</a>.  <a href="#name-terminology" class="internal xref">Terminology</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.2">
+            <p id="section-toc.1-1.2.1"><a href="#section-2" class="auto internal xref">2</a>.  <a href="#name-overview" class="internal xref">Overview</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3">
+            <p id="section-toc.1-1.3.1"><a href="#section-3" class="auto internal xref">3</a>.  <a href="#name-authorization-details-types" class="internal xref">Authorization Details Types</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.1">
+                <p id="section-toc.1-1.3.2.1.1"><a href="#section-3.1" class="auto internal xref">3.1</a>.  <a href="#name-the-payment_mandate-type" class="internal xref">The payment_mandate Type</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.2">
+                <p id="section-toc.1-1.3.2.2.1"><a href="#section-3.2" class="auto internal xref">3.2</a>.  <a href="#name-the-single_payment-type" class="internal xref">The single_payment Type</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.3">
+                <p id="section-toc.1-1.3.2.3.1"><a href="#section-3.3" class="auto internal xref">3.3</a>.  <a href="#name-intent" class="internal xref">Intent</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4">
+            <p id="section-toc.1-1.4.1"><a href="#section-4" class="auto internal xref">4</a>.  <a href="#name-mandate-evaluation" class="internal xref">Mandate Evaluation</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.1">
+                <p id="section-toc.1-1.4.2.1.1"><a href="#section-4.1" class="auto internal xref">4.1</a>.  <a href="#name-what-counts-against-a-limit" class="internal xref">What Counts Against a Limit</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.2">
+                <p id="section-toc.1-1.4.2.2.1"><a href="#section-4.2" class="auto internal xref">4.2</a>.  <a href="#name-reasons-in-order" class="internal xref">Reasons, in Order</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.3">
+                <p id="section-toc.1-1.4.2.3.1"><a href="#section-4.3" class="auto internal xref">4.3</a>.  <a href="#name-outcomes" class="internal xref">Outcomes</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5">
+            <p id="section-toc.1-1.5.1"><a href="#section-5" class="auto internal xref">5</a>.  <a href="#name-signalling-that-approval-is" class="internal xref">Signalling That Approval Is Needed</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.1">
+                <p id="section-toc.1-1.5.2.1.1"><a href="#section-5.1" class="auto internal xref">5.1</a>.  <a href="#name-with-the-transaction-author" class="internal xref">With the Transaction Authorization Challenge</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.2">
+                <p id="section-toc.1-1.5.2.2.1"><a href="#section-5.2" class="auto internal xref">5.2</a>.  <a href="#name-without-the-challenge" class="internal xref">Without the Challenge</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.3">
+                <p id="section-toc.1-1.5.2.3.1"><a href="#section-5.3" class="auto internal xref">5.3</a>.  <a href="#name-approval-rules" class="internal xref">Approval Rules</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6">
+            <p id="section-toc.1-1.6.1"><a href="#section-6" class="auto internal xref">6</a>.  <a href="#name-receipts" class="internal xref">Receipts</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.1">
+                <p id="section-toc.1-1.6.2.1.1"><a href="#section-6.1" class="auto internal xref">6.1</a>.  <a href="#name-receipt-members" class="internal xref">Receipt Members</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.2">
+                <p id="section-toc.1-1.6.2.2.1"><a href="#section-6.2" class="auto internal xref">6.2</a>.  <a href="#name-chaining-and-signature" class="internal xref">Chaining and Signature</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.3">
+                <p id="section-toc.1-1.6.2.3.1"><a href="#section-6.3" class="auto internal xref">6.3</a>.  <a href="#name-personal-data-outside-the-c" class="internal xref">Personal Data Outside the Chain</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.4">
+                <p id="section-toc.1-1.6.2.4.1"><a href="#section-6.4" class="auto internal xref">6.4</a>.  <a href="#name-disclosure" class="internal xref">Disclosure</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7">
+            <p id="section-toc.1-1.7.1"><a href="#section-7" class="auto internal xref">7</a>.  <a href="#name-security-considerations" class="internal xref">Security Considerations</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8">
+            <p id="section-toc.1-1.8.1"><a href="#section-8" class="auto internal xref">8</a>.  <a href="#name-privacy-considerations" class="internal xref">Privacy Considerations</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9">
+            <p id="section-toc.1-1.9.1"><a href="#section-9" class="auto internal xref">9</a>.  <a href="#name-iana-considerations" class="internal xref">IANA Considerations</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.1">
+                <p id="section-toc.1-1.9.2.1.1"><a href="#section-9.1" class="auto internal xref">9.1</a>.  <a href="#name-oauth-extensions-error-regi" class="internal xref">OAuth Extensions Error Registry</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.2">
+                <p id="section-toc.1-1.9.2.2.1"><a href="#section-9.2" class="auto internal xref">9.2</a>.  <a href="#name-oauth-authorization-server-" class="internal xref">OAuth Authorization Server Metadata</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.3">
+                <p id="section-toc.1-1.9.2.3.1"><a href="#section-9.3" class="auto internal xref">9.3</a>.  <a href="#name-payment-mandate-reasons-reg" class="internal xref">Payment Mandate Reasons Registry</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.4">
+                <p id="section-toc.1-1.9.2.4.1"><a href="#section-9.4" class="auto internal xref">9.4</a>.  <a href="#name-media-type-registration" class="internal xref">Media Type Registration</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10">
+            <p id="section-toc.1-1.10.1"><a href="#section-10" class="auto internal xref">10</a>. <a href="#name-references" class="internal xref">References</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.1">
+                <p id="section-toc.1-1.10.2.1.1"><a href="#section-10.1" class="auto internal xref">10.1</a>.  <a href="#name-normative-references" class="internal xref">Normative References</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.2">
+                <p id="section-toc.1-1.10.2.2.1"><a href="#section-10.2" class="auto internal xref">10.2</a>.  <a href="#name-informative-references" class="internal xref">Informative References</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11">
+            <p id="section-toc.1-1.11.1"><a href="#appendix-A" class="auto internal xref">Appendix A</a>.  <a href="#name-examples" class="internal xref">Examples</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12">
+            <p id="section-toc.1-1.12.1"><a href="#appendix-B" class="auto internal xref">Appendix B</a>.  <a href="#name-implementation-status" class="internal xref">Implementation Status</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13">
+            <p id="section-toc.1-1.13.1"><a href="#appendix-C" class="auto internal xref"></a><a href="#name-acknowledgments" class="internal xref">Acknowledgments</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14">
+            <p id="section-toc.1-1.14.1"><a href="#appendix-D" class="auto internal xref"></a><a href="#name-authors-address" class="internal xref">Author's Address</a></p>
+</li>
+        </ul>
+</nav>
+</section>
+</div>
+<div id="intro">
+<section id="section-1">
+      <h2 id="name-introduction">
+<a href="#section-1" class="section-number selfRef">1. </a><a href="#name-introduction" class="section-name selfRef">Introduction</a>
+      </h2>
+<p id="section-1-1">A customer who lets an agent pay bills wants to say, in terms they understand: whom it may pay, how much at a time, how often, how much in a month, and when it must ask first. The bank holding the account needs the same statement in a form it can enforce on every request, outside the agent and outside any language model, and needs evidence afterwards of what was asked, what the rules said and what it did.<a href="#section-1-1" class="pilcrow">¶</a></p>
+<p id="section-1-2">Rich Authorization Requests <span>[<a href="#RFC9396" class="cite xref">RFC9396</a>]</span> provide the container: an <code>authorization_details</code> object whose <code>type</code> determines its contents. This document defines the contents for payment mandates, so that one agent integration works with every account-servicing institution that implements it, and so that institutions describe the same limits in the same way.<a href="#section-1-2" class="pilcrow">¶</a></p>
+<p id="section-1-3">The OAuth Transaction Authorization Challenge <span>[<a href="#I-D.rosomakho-oauth-txn-challenge" class="cite xref">I-D.rosomakho-oauth-txn-challenge</a>]</span> defines how a protected resource challenges a client for approval of one specific transaction, and how a short-lived token for that transaction is issued once the approval is given. This document is designed to work with it. It adds three things the challenge leaves to each deployment:<a href="#section-1-3" class="pilcrow">¶</a></p>
+<ol start="1" type="1" class="normal type-1" id="section-1-4">
+        <li id="section-1-4.1">the standing mandate against which a resource decides whether a payment needs approval at all (<a href="#types" class="auto internal xref">Section 3</a>);<a href="#section-1-4.1" class="pilcrow">¶</a>
+</li>
+        <li id="section-1-4.2">a machine-readable reason, from a defined and ordered set, saying which rule of the mandate a payment falls outside (<a href="#evaluation" class="auto internal xref">Section 4</a>, <a href="#signalling" class="auto internal xref">Section 5</a>); and<a href="#section-1-4.2" class="pilcrow">¶</a>
+</li>
+        <li id="section-1-4.3">a signed receipt of every decision, including approvals, that the account-servicing institution keeps and can disclose in a dispute (<a href="#receipts" class="auto internal xref">Section 6</a>).<a href="#section-1-4.3" class="pilcrow">¶</a>
+</li>
+      </ol>
+<p id="section-1-5">Use case analysis in the working group <span>[<a href="#I-D.chen-oauth-agent-authz-use-cases" class="cite xref">I-D.chen-oauth-agent-authz-use-cases</a>]</span> identifies verifiable evidence created when an action is taken as a gap; <a href="#receipts" class="auto internal xref">Section 6</a> is a concrete proposal for payments.<a href="#section-1-5" class="pilcrow">¶</a></p>
+<section id="section-1.1">
+        <h3 id="name-scope">
+<a href="#section-1.1" class="section-number selfRef">1.1. </a><a href="#name-scope" class="section-name selfRef">Scope</a>
+        </h3>
+<p id="section-1.1-1">This document covers payments from an account held by the customer at the institution that operates the authorization server and the resource. It does not define how an agent is identified or attested, how the customer is authenticated, or how payments are executed, cleared or settled. Read-only access to account information is out of scope; existing open banking types serve it.<a href="#section-1.1-1" class="pilcrow">¶</a></p>
+</section>
+<section id="section-1.2">
+        <h3 id="name-requirements-language">
+<a href="#section-1.2" class="section-number selfRef">1.2. </a><a href="#name-requirements-language" class="section-name selfRef">Requirements Language</a>
+        </h3>
+<p id="section-1.2-1">The key words "<span class="bcp14">MUST</span>", "<span class="bcp14">MUST NOT</span>", "<span class="bcp14">REQUIRED</span>", "<span class="bcp14">SHALL</span>", "<span class="bcp14">SHALL NOT</span>", "<span class="bcp14">SHOULD</span>", "<span class="bcp14">SHOULD NOT</span>", "<span class="bcp14">RECOMMENDED</span>", "<span class="bcp14">NOT RECOMMENDED</span>", "<span class="bcp14">MAY</span>", and "<span class="bcp14">OPTIONAL</span>" in this document are to be interpreted as described in BCP 14 <span>[<a href="#RFC2119" class="cite xref">RFC2119</a>]</span> <span>[<a href="#RFC8174" class="cite xref">RFC8174</a>]</span> when, and only when, they appear in all capitals, as shown here.<a href="#section-1.2-1" class="pilcrow">¶</a></p>
+</section>
+<section id="section-1.3">
+        <h3 id="name-terminology">
+<a href="#section-1.3" class="section-number selfRef">1.3. </a><a href="#name-terminology" class="section-name selfRef">Terminology</a>
+        </h3>
+<p id="section-1.3-1">This document uses the terms "authorization server", "client", "resource server" and "access token" from <span>[<a href="#RFC6749" class="cite xref">RFC6749</a>]</span>, and "authorization details" from <span>[<a href="#RFC9396" class="cite xref">RFC9396</a>]</span>.<a href="#section-1.3-1" class="pilcrow">¶</a></p>
+<span class="break"></span><dl class="dlParallel" id="section-1.3-2">
+          <dt id="section-1.3-2.1">Customer:</dt>
+          <dd style="margin-left: 1.5em" id="section-1.3-2.2">The resource owner: the person or organisation that holds the account.<a href="#section-1.3-2.2" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-1.3-2.3">Agent:</dt>
+          <dd style="margin-left: 1.5em" id="section-1.3-2.4">The client acting for the customer. It may be operated by a third party and may be driven by a language model.<a href="#section-1.3-2.4" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-1.3-2.5">Institution:</dt>
+          <dd style="margin-left: 1.5em" id="section-1.3-2.6">The account-servicing institution that operates the authorization server, the resource server, the mandate store and the receipt log.<a href="#section-1.3-2.6" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-1.3-2.7">Mandate:</dt>
+          <dd style="margin-left: 1.5em" id="section-1.3-2.8">The authorization details of type <code>payment_mandate</code> the customer approved, as stored by the institution.<a href="#section-1.3-2.8" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-1.3-2.9">Payee:</dt>
+          <dd style="margin-left: 1.5em" id="section-1.3-2.10">A beneficiary the customer has saved at the institution, identified by an institution-assigned identifier.<a href="#section-1.3-2.10" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-1.3-2.11">Held payment:</dt>
+          <dd style="margin-left: 1.5em" id="section-1.3-2.12">A payment the institution has accepted from the agent but whose outcome its payment system has not yet confirmed or declined.<a href="#section-1.3-2.12" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-1.3-2.13">Reason:</dt>
+          <dd style="margin-left: 1.5em" id="section-1.3-2.14">A code from <a href="#reasons" class="auto internal xref">Section 4.2</a> saying which rule of the mandate a payment falls outside.<a href="#section-1.3-2.14" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+</dl>
+</section>
+</section>
+</div>
+<div id="overview">
+<section id="section-2">
+      <h2 id="name-overview">
+<a href="#section-2" class="section-number selfRef">2. </a><a href="#name-overview" class="section-name selfRef">Overview</a>
+      </h2>
+<span id="name-payment-under-a-mandate-wit"></span><figure id="figure-1">
+        <div class="alignLeft art-ascii-art art-text artwork" id="section-2-1.1">
+<pre>
+ Customer        Agent                Institution (AS, RS, receipts)
+    |              |  1. authorization request with           |
+    |              |     payment_mandate, intent              |
+    |&lt;-------------+------------------------------------------&gt;|
+    |  2. consent screen: payees, limits, approval mode        |
+    |---------------------------------------------------------&gt;|
+    |              |  3. access token (sender-constrained)    |
+    |              |&lt;-----------------------------------------|
+    |              |  4. payment request                       |
+    |              |-----------------------------------------&gt;|
+    |              |        5. evaluate mandate (Section 4)   |
+    |              |           covered: execute, receipt      |
+    |              |           not covered: hold, receipt     |
+    |              |  6. approval challenge with reason       |
+    |              |&lt;-----------------------------------------|
+    |  7. approve this exact payment (out of band)             |
+    |---------------------------------------------------------&gt;|
+    |              |  8. single_payment token, same payment   |
+    |              |-----------------------------------------&gt;|
+    |              |  9. result; receipt names the approval   |
+    |              |&lt;-----------------------------------------|
+</pre>
+</div>
+<figcaption><a href="#figure-1" class="selfRef">Figure 1</a>:
+<a href="#name-payment-under-a-mandate-wit" class="selfRef">Payment under a mandate, with an approval</a>
+        </figcaption></figure>
+<p id="section-2-2">The customer approves a standing mandate once (steps 1 to 3). Each payment is evaluated against it by the institution (step 5). A payment inside the mandate proceeds. A payment outside it is held, and the agent is told the reason and offered a single payment for the customer to approve (steps 6 to 8). Every decision produces a receipt (<a href="#receipts" class="auto internal xref">Section 6</a>).<a href="#section-2-2" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="types">
+<section id="section-3">
+      <h2 id="name-authorization-details-types">
+<a href="#section-3" class="section-number selfRef">3. </a><a href="#name-authorization-details-types" class="section-name selfRef">Authorization Details Types</a>
+      </h2>
+<div id="mandate-type">
+<section id="section-3.1">
+        <h3 id="name-the-payment_mandate-type">
+<a href="#section-3.1" class="section-number selfRef">3.1. </a><a href="#name-the-payment_mandate-type" class="section-name selfRef">The payment_mandate Type</a>
+        </h3>
+<p id="section-3.1-1">An authorization details object of type <code>payment_mandate</code> grants the agent permission to initiate payments to named payees within limits. It has the following members, in addition to <code>type</code>:<a href="#section-3.1-1" class="pilcrow">¶</a></p>
+<span class="break"></span><dl class="dlNewline" id="section-3.1-2">
+          <dt id="section-3.1-2.1">actions:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.1-2.2">
+            <span class="bcp14">REQUIRED</span>. An array containing the string <code>pay_existing_beneficiary</code>. Other values are reserved for future extensions; an institution <span class="bcp14">MUST</span> refuse a mandate containing an action it does not support.<a href="#section-3.1-2.2" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-3.1-2.3">accounts:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.1-2.4">
+            <span class="bcp14">REQUIRED</span>. An array of institution-assigned account identifiers the agent may pay from.<a href="#section-3.1-2.4" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-3.1-2.5">payees:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.1-2.6">
+            <span class="bcp14">REQUIRED</span>. A non-empty array of institution-assigned payee identifiers. Payees are fixed when the mandate is approved: a payee the customer saves later is not covered until the customer adds it to the mandate. An agent <span class="bcp14">MUST NOT</span> be able to add a payee.<a href="#section-3.1-2.6" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-3.1-2.7">approval:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.1-2.8">
+            <span class="bcp14">REQUIRED</span>. The approval mode: <code>every_payment</code> (the customer approves each payment) or <code>within_limits</code> (payments inside the mandate proceed without approval).<a href="#section-3.1-2.8" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-3.1-2.9">limits:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.1-2.10">
+            <p id="section-3.1-2.10.1"><span class="bcp14">REQUIRED</span>. An object with the following members. Amounts are objects with members <code>amount</code> (a decimal string with at most the number of fractional digits of the currency) and <code>currency</code> (an ISO 4217 alphabetic code). All amounts in one mandate <span class="bcp14">MUST</span> use the same currency.<a href="#section-3.1-2.10.1" class="pilcrow">¶</a></p>
+<span class="break"></span><dl class="dlParallel" id="section-3.1-2.10.2">
+              <dt id="section-3.1-2.10.2.1">per_payment:</dt>
+              <dd style="margin-left: 1.5em" id="section-3.1-2.10.2.2">
+                <span class="bcp14">REQUIRED</span>. The largest single payment. It <span class="bcp14">MUST NOT</span> exceed <code>per_period.amount</code>.<a href="#section-3.1-2.10.2.2" class="pilcrow">¶</a>
+</dd>
+              <dd class="break"></dd>
+<dt id="section-3.1-2.10.2.3">per_period:</dt>
+              <dd style="margin-left: 1.5em" id="section-3.1-2.10.2.4">
+                <span class="bcp14">REQUIRED</span>. An object with <code>amount</code> and <code>currency</code> (the most that may be paid in one period), <code>count</code> (an integer, the most payments in one period) and <code>period</code> (one of <code>day</code>, <code>week</code>, <code>month</code>). Periods are calendar periods in the time zone the institution publishes as <code>payment_mandate_time_zone</code> in its authorization server metadata <span>[<a href="#RFC8414" class="cite xref">RFC8414</a>]</span>.<a href="#section-3.1-2.10.2.4" class="pilcrow">¶</a>
+</dd>
+              <dd class="break"></dd>
+<dt id="section-3.1-2.10.2.5">approve_above:</dt>
+              <dd style="margin-left: 1.5em" id="section-3.1-2.10.2.6">
+                <span class="bcp14">OPTIONAL</span>. With <code>within_limits</code>, payments above this amount need the customer's approval.<a href="#section-3.1-2.10.2.6" class="pilcrow">¶</a>
+</dd>
+            <dd class="break"></dd>
+</dl>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-3.1-2.11">valid_until:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.1-2.12">
+            <span class="bcp14">OPTIONAL</span>. An RFC 3339 <span>[<a href="#RFC3339" class="cite xref">RFC3339</a>]</span> date-time after which the mandate covers no payment. The institution <span class="bcp14">MAY</span> impose a shorter maximum.<a href="#section-3.1-2.12" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-3.1-2.13">intent:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.1-2.14">
+            <span class="bcp14">OPTIONAL</span>. A plain-language statement of what the mandate is for, at most 140 characters, for example "Pay my monthly utility bills". See <a href="#intent" class="auto internal xref">Section 3.3</a>.<a href="#section-3.1-2.14" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+</dl>
+<p id="section-3.1-3">An agent <span class="bcp14">MAY</span> send a <code>payment_mandate</code> in its authorization request with any members omitted or proposed. The values that apply are those the customer chooses during consent. The authorization server <span class="bcp14">MUST</span> return, and store, the authorization details as granted, which <span class="bcp14">MAY</span> be narrower than requested and <span class="bcp14">MUST NOT</span> be broader than what the customer chose (<span><a href="https://rfc-editor.org/rfc/rfc9396#section-7" class="relref">Section 7</a> of [<a href="#RFC9396" class="cite xref">RFC9396</a>]</span>).<a href="#section-3.1-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="single-type">
+<section id="section-3.2">
+        <h3 id="name-the-single_payment-type">
+<a href="#section-3.2" class="section-number selfRef">3.2. </a><a href="#name-the-single_payment-type" class="section-name selfRef">The single_payment Type</a>
+        </h3>
+<p id="section-3.2-1">An authorization details object of type <code>single_payment</code> permits exactly one payment. It is offered by the institution when a payment falls outside a mandate (<a href="#signalling" class="auto internal xref">Section 5</a>); an agent <span class="bcp14">MUST NOT</span> construct one itself, and an institution <span class="bcp14">MUST</span> refuse an approval request for a <code>single_payment</code> it did not offer. Members:<a href="#section-3.2-1" class="pilcrow">¶</a></p>
+<span class="break"></span><dl class="dlParallel" id="section-3.2-2">
+          <dt id="section-3.2-2.1">from:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.2-2.2">
+            <span class="bcp14">REQUIRED</span>. The debtor account identifier.<a href="#section-3.2-2.2" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-3.2-2.3">to:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.2-2.4">
+            <span class="bcp14">REQUIRED</span>. An object with <code>name</code> and <code>account</code> of the payee.<a href="#section-3.2-2.4" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-3.2-2.5">amount:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.2-2.6">
+            <span class="bcp14">REQUIRED</span>. The amount object.<a href="#section-3.2-2.6" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-3.2-2.7">reference:</dt>
+          <dd style="margin-left: 1.5em" id="section-3.2-2.8">
+            <span class="bcp14">REQUIRED</span>. The payment reference; may be empty.<a href="#section-3.2-2.8" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+</dl>
+<p id="section-3.2-3">The institution computes a digest over the JCS canonical form <span>[<a href="#RFC8785" class="cite xref">RFC8785</a>]</span> of these members. An approval, and any token issued from it, is bound to that digest and to the held payment it was offered for. A payment whose digest differs <span class="bcp14">MUST</span> be refused.<a href="#section-3.2-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="intent">
+<section id="section-3.3">
+        <h3 id="name-intent">
+<a href="#section-3.3" class="section-number selfRef">3.3. </a><a href="#name-intent" class="section-name selfRef">Intent</a>
+        </h3>
+<p id="section-3.3-1">The <code>intent</code> member records the purpose the customer confirmed. The agent <span class="bcp14">MAY</span> propose it; the consent screen <span class="bcp14">MUST</span> show it and <span class="bcp14">SHOULD</span> let the customer change it. It is informative: it does not widen or narrow what the mandate permits, and an institution <span class="bcp14">MUST NOT</span> base an authorization decision on it. It is recorded on receipts (<a href="#receipts" class="auto internal xref">Section 6</a>) as personal data (<a href="#personal" class="auto internal xref">Section 6.3</a>).<a href="#section-3.3-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="evaluation">
+<section id="section-4">
+      <h2 id="name-mandate-evaluation">
+<a href="#section-4" class="section-number selfRef">4. </a><a href="#name-mandate-evaluation" class="section-name selfRef">Mandate Evaluation</a>
+      </h2>
+<p id="section-4-1">The resource server evaluates every payment request against the stored mandate after it has validated the access token, its sender constraint (for example DPoP <span>[<a href="#RFC9449" class="cite xref">RFC9449</a>]</span>), and that the grant is active. Evaluation and, if the payment proceeds or is held, recording the held payment <span class="bcp14">MUST</span> be performed as one atomic operation per mandate, so that two concurrent payments cannot both be found within a limit that only one fits.<a href="#section-4-1" class="pilcrow">¶</a></p>
+<div id="counting">
+<section id="section-4.1">
+        <h3 id="name-what-counts-against-a-limit">
+<a href="#section-4.1" class="section-number selfRef">4.1. </a><a href="#name-what-counts-against-a-limit" class="section-name selfRef">What Counts Against a Limit</a>
+        </h3>
+<p id="section-4.1-1">For the period containing the request, the amount used and the count of payments used each include payments the institution has completed, payments it holds while its payment system has not confirmed or declined them, and payments the customer approved under a <code>single_payment</code>. A held payment <span class="bcp14">MUST</span> continue to count until the payment system confirms or declines it, or the institution has cancelled it and the payment system has confirmed the cancellation. It <span class="bcp14">MUST NOT</span> be released on a timer.<a href="#section-4.1-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="reasons">
+<section id="section-4.2">
+        <h3 id="name-reasons-in-order">
+<a href="#section-4.2" class="section-number selfRef">4.2. </a><a href="#name-reasons-in-order" class="section-name selfRef">Reasons, in Order</a>
+        </h3>
+<p id="section-4.2-1">The resource server applies the following rules in order. The first rule the payment breaks determines the reason. If it breaks none, the payment is covered by the mandate.<a href="#section-4.2-1" class="pilcrow">¶</a></p>
+<span id="name-payment-mandate-reasons"></span><table class="center" id="table-1">
+          <caption>
+<a href="#table-1" class="selfRef">Table 1</a>:
+<a href="#name-payment-mandate-reasons" class="selfRef">Payment mandate reasons</a>
+          </caption>
+<thead>
+            <tr>
+              <th class="text-left" rowspan="1" colspan="1">Order</th>
+              <th class="text-left" rowspan="1" colspan="1">Reason</th>
+              <th class="text-left" rowspan="1" colspan="1">The payment...</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">1</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>new_recipient</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">is to an account that is not a saved payee of the customer</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">2</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>payee_not_on_mandate</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">is to a saved payee that is not in <code>payees</code>
+</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">3</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>over_per_payment</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">is above <code>limits.per_payment</code>
+</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">4</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>over_period_count</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">would exceed <code>limits.per_period.count</code>
+</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">5</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>over_period_limit</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">would take the amount used above <code>limits.per_period.amount</code>
+</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">6</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>every_payment</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">is under a mandate whose <code>approval</code> is <code>every_payment</code>
+</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">7</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>over_approval_threshold</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">is above <code>limits.approve_above</code>
+</td>
+            </tr>
+          </tbody>
+        </table>
+<p id="section-4.2-3">Reasons 1 to 5 are limits of the mandate; reasons 6 and 7 are the customer's choice to be asked. A payment from an account not in <code>accounts</code>, an expired mandate, or an action not granted is not a reason: it is refused with <code>insufficient_authorization</code> or the applicable error, and no approval is offered.<a href="#section-4.2-3" class="pilcrow">¶</a></p>
+<p id="section-4.2-4">The fixed order means an agent receives the same reason from every institution for the same situation, and a customer is told the most fundamental problem first.<a href="#section-4.2-4" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="outcomes">
+<section id="section-4.3">
+        <h3 id="name-outcomes">
+<a href="#section-4.3" class="section-number selfRef">4.3. </a><a href="#name-outcomes" class="section-name selfRef">Outcomes</a>
+        </h3>
+<p id="section-4.3-1">A covered payment proceeds. For a payment with a reason, the institution either:<a href="#section-4.3-1" class="pilcrow">¶</a></p>
+<ul class="normal">
+<li class="normal" id="section-4.3-2.1">holds the payment and offers it for approval (<a href="#signalling" class="auto internal xref">Section 5</a>); or<a href="#section-4.3-2.1" class="pilcrow">¶</a>
+</li>
+          <li class="normal" id="section-4.3-2.2">refuses it, with the reason, without offering approval.<a href="#section-4.3-2.2" class="pilcrow">¶</a>
+</li>
+        </ul>
+<p id="section-4.3-3">An institution <span class="bcp14">MAY</span> refuse rather than offer approval for reasons 1 to 5, for example where the client's tier of assurance is low. It <span class="bcp14">MUST</span> offer approval, not refuse, for reasons 6 and 7. An approval <span class="bcp14">MUST NOT</span> add a payee, raise a limit or change the mandate. An approval given for reason 5 permits the period's limit to be exceeded by that one payment only.<a href="#section-4.3-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="signalling">
+<section id="section-5">
+      <h2 id="name-signalling-that-approval-is">
+<a href="#section-5" class="section-number selfRef">5. </a><a href="#name-signalling-that-approval-is" class="section-name selfRef">Signalling That Approval Is Needed</a>
+      </h2>
+<div id="with-challenge">
+<section id="section-5.1">
+        <h3 id="name-with-the-transaction-author">
+<a href="#section-5.1" class="section-number selfRef">5.1. </a><a href="#name-with-the-transaction-author" class="section-name selfRef">With the Transaction Authorization Challenge</a>
+        </h3>
+<p id="section-5.1-1">A resource server that implements <span>[<a href="#I-D.rosomakho-oauth-txn-challenge" class="cite xref">I-D.rosomakho-oauth-txn-challenge</a>]</span> responds with a transaction authorization challenge whose <code>authorization_details</code> contains the single <code>single_payment</code> it offers, and adds the claim:<a href="#section-5.1-1" class="pilcrow">¶</a></p>
+<span class="break"></span><dl class="dlParallel" id="section-5.1-2">
+          <dt id="section-5.1-2.1">mandate_reason:</dt>
+          <dd style="margin-left: 1.5em" id="section-5.1-2.2">The reason from <a href="#reasons" class="auto internal xref">Section 4.2</a>.<a href="#section-5.1-2.2" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+</dl>
+<p id="section-5.1-3">The challenge's <code>reason</code> claim <span class="bcp14">SHOULD</span> state the same reason in words the customer can understand, built by the institution from the payment itself and never from text supplied by the agent alone. The challenge's <code>txn</code> identifies the held payment.<a href="#section-5.1-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="error-response">
+<section id="section-5.2">
+        <h3 id="name-without-the-challenge">
+<a href="#section-5.2" class="section-number selfRef">5.2. </a><a href="#name-without-the-challenge" class="section-name selfRef">Without the Challenge</a>
+        </h3>
+<p id="section-5.2-1">Otherwise, the resource server responds with HTTP status 403 and a JSON <span>[<a href="#RFC8259" class="cite xref">RFC8259</a>]</span> body with these members:<a href="#section-5.2-1" class="pilcrow">¶</a></p>
+<span class="break"></span><dl class="dlParallel" id="section-5.2-2">
+          <dt id="section-5.2-2.1">error:</dt>
+          <dd style="margin-left: 1.5em" id="section-5.2-2.2">
+            <code>approval_required</code>.<a href="#section-5.2-2.2" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-5.2-2.3">error_description:</dt>
+          <dd style="margin-left: 1.5em" id="section-5.2-2.4">The reason in words.<a href="#section-5.2-2.4" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-5.2-2.5">reason:</dt>
+          <dd style="margin-left: 1.5em" id="section-5.2-2.6">The reason from <a href="#reasons" class="auto internal xref">Section 4.2</a>.<a href="#section-5.2-2.6" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-5.2-2.7">authorization_details:</dt>
+          <dd style="margin-left: 1.5em" id="section-5.2-2.8">An array containing the single <code>single_payment</code> offered.<a href="#section-5.2-2.8" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-5.2-2.9">payment_id:</dt>
+          <dd style="margin-left: 1.5em" id="section-5.2-2.10">The identifier of the held payment.<a href="#section-5.2-2.10" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+</dl>
+<p id="section-5.2-3">The agent requests the customer's approval for exactly that <code>single_payment</code>, for example with Client-Initiated Backchannel Authentication <span>[<a href="#CIBA" class="cite xref">CIBA</a>]</span>, and repeats the payment with the resulting token and the same idempotency key.<a href="#section-5.2-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="approval-rules">
+<section id="section-5.3">
+        <h3 id="name-approval-rules">
+<a href="#section-5.3" class="section-number selfRef">5.3. </a><a href="#name-approval-rules" class="section-name selfRef">Approval Rules</a>
+        </h3>
+<ul class="normal">
+<li class="normal" id="section-5.3-1.1">The prompt shown to the customer <span class="bcp14">MUST</span> be built by the institution from the <code>single_payment</code>. Any text from the agent <span class="bcp14">MUST</span> be shown separately and labelled as the agent's words.<a href="#section-5.3-1.1" class="pilcrow">¶</a>
+</li>
+          <li class="normal" id="section-5.3-1.2">An approval and any token issued from it <span class="bcp14">MUST</span> be usable once, for the held payment it was offered for, and only before it expires. The institution <span class="bcp14">MUST</span> mark the approval used in the same atomic operation that moves the held payment to execution.<a href="#section-5.3-1.2" class="pilcrow">¶</a>
+</li>
+          <li class="normal" id="section-5.3-1.3">A payment completed under an approval counts against the mandate's period amount and count (<a href="#counting" class="auto internal xref">Section 4.1</a>).<a href="#section-5.3-1.3" class="pilcrow">¶</a>
+</li>
+        </ul>
+</section>
+</div>
+</section>
+</div>
+<div id="receipts">
+<section id="section-6">
+      <h2 id="name-receipts">
+<a href="#section-6" class="section-number selfRef">6. </a><a href="#name-receipts" class="section-name selfRef">Receipts</a>
+      </h2>
+<p id="section-6-1">The institution records every decision on a payment request, whether covered, held, refused, approved, completed, declined, cancelled or of unknown outcome, as a receipt. Receipts are kept by the institution, not by the agent; the agent is never its own witness.<a href="#section-6-1" class="pilcrow">¶</a></p>
+<div id="receipt-members">
+<section id="section-6.1">
+        <h3 id="name-receipt-members">
+<a href="#section-6.1" class="section-number selfRef">6.1. </a><a href="#name-receipt-members" class="section-name selfRef">Receipt Members</a>
+        </h3>
+<p id="section-6.1-1">A receipt is a JSON object with these members. Members marked personal are carried as commitments (<a href="#personal" class="auto internal xref">Section 6.3</a>).<a href="#section-6.1-1" class="pilcrow">¶</a></p>
+<span id="name-receipt-members-2"></span><table class="center" id="table-2">
+          <caption>
+<a href="#table-2" class="selfRef">Table 2</a>:
+<a href="#name-receipt-members-2" class="selfRef">Receipt members</a>
+          </caption>
+<thead>
+            <tr>
+              <th class="text-left" rowspan="1" colspan="1">Member</th>
+              <th class="text-left" rowspan="1" colspan="1">Presence</th>
+              <th class="text-left" rowspan="1" colspan="1">Meaning</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>seq</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">REQUIRED</td>
+              <td class="text-left" rowspan="1" colspan="1">Position in the chain, from 1</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>prev</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">REQUIRED</td>
+              <td class="text-left" rowspan="1" colspan="1">The <code>hash</code> of the previous receipt in the chain, or the genesis value</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>time</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">REQUIRED</td>
+              <td class="text-left" rowspan="1" colspan="1">RFC 3339 date-time with offset</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>grant_id</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">REQUIRED</td>
+              <td class="text-left" rowspan="1" colspan="1">The mandate's grant identifier</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>mandate_version</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">REQUIRED</td>
+              <td class="text-left" rowspan="1" colspan="1">The version of the mandate evaluated</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>client_id</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">REQUIRED</td>
+              <td class="text-left" rowspan="1" colspan="1">The agent</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>action</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">REQUIRED</td>
+              <td class="text-left" rowspan="1" colspan="1">For example <code>payment</code>
+</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>outcome</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">REQUIRED</td>
+              <td class="text-left" rowspan="1" colspan="1">One of <code>allowed</code>, <code>held</code>, <code>refused</code>, <code>failed</code>, <code>cancelled</code>, <code>unknown</code>
+</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>basis</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">REQUIRED</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>mandate</code> (covered), <code>approval</code> (the customer approved), or <code>refused</code>
+</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>reason</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">When applicable</td>
+              <td class="text-left" rowspan="1" colspan="1">The reason from <a href="#reasons" class="auto internal xref">Section 4.2</a>
+</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>approval_id</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">When applicable</td>
+              <td class="text-left" rowspan="1" colspan="1">The customer's approval</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>payment_id</code>, <code>idempotency_key</code>, <code>institution_payment_id</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">When applicable</td>
+              <td class="text-left" rowspan="1" colspan="1">Match the receipt to the agent's request and to the institution's payment record</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>policy</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">RECOMMENDED</td>
+              <td class="text-left" rowspan="1" colspan="1">Object with <code>version</code> and <code>hash</code> of the institution's policy in force</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>intent</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">When present, personal</td>
+              <td class="text-left" rowspan="1" colspan="1">The mandate's intent</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>agent_instruction</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">When supplied, personal</td>
+              <td class="text-left" rowspan="1" colspan="1">What the agent states it was asked to do, labelled as supplied by the agent. Never used to decide</td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">
+                <code>payment</code>
+</td>
+              <td class="text-left" rowspan="1" colspan="1">When applicable, personal</td>
+              <td class="text-left" rowspan="1" colspan="1">Payee name and account, amount, currency and reference</td>
+            </tr>
+          </tbody>
+        </table>
+</section>
+</div>
+<div id="chain">
+<section id="section-6.2">
+        <h3 id="name-chaining-and-signature">
+<a href="#section-6.2" class="section-number selfRef">6.2. </a><a href="#name-chaining-and-signature" class="section-name selfRef">Chaining and Signature</a>
+        </h3>
+<p id="section-6.2-1">The <code>hash</code> of a receipt is the string <code>sha256:</code> followed by the lowercase hexadecimal SHA-256 digest of the JCS <span>[<a href="#RFC8785" class="cite xref">RFC8785</a>]</span> serialisation of the receipt. The genesis value of <code>prev</code> is <code>sha256:</code> followed by 64 zeros. The institution signs each receipt with a JWS <span>[<a href="#RFC7515" class="cite xref">RFC7515</a>]</span> whose payload is <code>{"seq": ..., "hash": ...}</code>, whose <code>typ</code> header is <code>payment-receipt+jwt</code>, and whose <code>kid</code> identifies a key published in the institution's JWK Set. Retired keys <span class="bcp14">MUST</span> remain published while receipts signed with them are retained.<a href="#section-6.2-1" class="pilcrow">¶</a></p>
+<p id="section-6.2-2">An institution <span class="bcp14">SHOULD</span> keep one chain per mandate and <span class="bcp14">SHOULD</span> periodically publish each chain's head so that an operator or auditor can detect a truncated chain. Changing or deleting a receipt breaks every later link.<a href="#section-6.2-2" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="personal">
+<section id="section-6.3">
+        <h3 id="name-personal-data-outside-the-c">
+<a href="#section-6.3" class="section-number selfRef">6.3. </a><a href="#name-personal-data-outside-the-c" class="section-name selfRef">Personal Data Outside the Chain</a>
+        </h3>
+<p id="section-6.3-1">Personal members are not written into the chained receipt. For each, the receipt carries, in a member <code>personal</code>, a commitment: <code>sha256:</code> followed by the hex SHA-256 digest of the JCS serialisation of <code>{"salt": s, "value": v}</code>, where <code>s</code> is at least 128 bits from a cryptographically secure random source, unique per member per receipt. The value and salt are stored separately and <span class="bcp14">MAY</span> be erased, for example to meet a data-subject request under <span>[<a href="#GDPR" class="cite xref">GDPR</a>]</span> or <span>[<a href="#POPIA" class="cite xref">POPIA</a>]</span>, without breaking the chain. A party given a value and its salt can check it against the receipt.<a href="#section-6.3-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="disclosure">
+<section id="section-6.4">
+        <h3 id="name-disclosure">
+<a href="#section-6.4" class="section-number selfRef">6.4. </a><a href="#name-disclosure" class="section-name selfRef">Disclosure</a>
+        </h3>
+<p id="section-6.4-1">An institution <span class="bcp14">SHOULD</span> return the signed receipt, or its hash, in the response to each payment request, so the agent's operator holds a copy. For a dispute, the institution <span class="bcp14">MAY</span> disclose an evidence set: the receipts for the mandate, their signatures, the disclosed personal values with their salts, the policy documents named, and the public keys needed to verify them.<a href="#section-6.4-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="security">
+<section id="section-7">
+      <h2 id="name-security-considerations">
+<a href="#section-7" class="section-number selfRef">7. </a><a href="#name-security-considerations" class="section-name selfRef">Security Considerations</a>
+      </h2>
+<p id="section-7-1">The security of the mandate depends on evaluation taking place at the institution, outside the agent. An agent driven by a language model can be manipulated by content it reads (indirect prompt injection); the rules in <a href="#evaluation" class="auto internal xref">Section 4</a> bound what such an agent can do regardless of what it is instructed to do. For the same reason, <code>intent</code> and <code>agent_instruction</code> are never inputs to an authorization decision.<a href="#section-7-1" class="pilcrow">¶</a></p>
+<p id="section-7-2">Access tokens and approval tokens <span class="bcp14">SHOULD</span> be sender-constrained, for example with DPoP <span>[<a href="#RFC9449" class="cite xref">RFC9449</a>]</span>, and the mandate <span class="bcp14">SHOULD</span> be bound to the agent's key when the customer approves it, so that a leaked token or grant identifier cannot be used by another client.<a href="#section-7-2" class="pilcrow">¶</a></p>
+<p id="section-7-3">Without the atomicity required in <a href="#evaluation" class="auto internal xref">Section 4</a>, concurrent requests could each pass a limit only one fits under. Without counting held payments (<a href="#counting" class="auto internal xref">Section 4.1</a>), an agent could exceed a limit by sending payments faster than the payment system confirms them. Releasing a held payment on a timer would allow a payment that later completes to be paid twice against the limit.<a href="#section-7-3" class="pilcrow">¶</a></p>
+<p id="section-7-4">A reason tells the agent which rule a payment broke. An agent could probe limits by sending payments and reading reasons. Institutions <span class="bcp14">SHOULD</span> rate-limit payment requests and approval requests, and limit the number of pending approvals per mandate, to prevent approval fatigue.<a href="#section-7-4" class="pilcrow">¶</a></p>
+<p id="section-7-5">Receipts prove that a record was made by the institution's key and not altered afterwards. They do not by themselves prove that the customer understood what they approved, or allocate liability.<a href="#section-7-5" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="privacy">
+<section id="section-8">
+      <h2 id="name-privacy-considerations">
+<a href="#section-8" class="section-number selfRef">8. </a><a href="#name-privacy-considerations" class="section-name selfRef">Privacy Considerations</a>
+      </h2>
+<p id="section-8-1">A mandate and its receipts describe a customer's financial relationships. The institution <span class="bcp14">SHOULD</span> use payee and account identifiers that are meaningful only within the institution, and a pairwise subject identifier per agent. The agent learns the reason a payment needs approval, which may reveal how much of a limit is used; this is inherent in telling the agent why, and the customer chose to share it with that agent.<a href="#section-8-1" class="pilcrow">¶</a></p>
+<p id="section-8-2">Personal members of receipts are committed rather than recorded (<a href="#personal" class="auto internal xref">Section 6.3</a>) so that the institution can meet erasure and minimisation obligations while keeping a verifiable record. Salts prevent confirming a guessed value from the commitment alone.<a href="#section-8-2" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="iana">
+<section id="section-9">
+      <h2 id="name-iana-considerations">
+<a href="#section-9" class="section-number selfRef">9. </a><a href="#name-iana-considerations" class="section-name selfRef">IANA Considerations</a>
+      </h2>
+<section id="section-9.1">
+        <h3 id="name-oauth-extensions-error-regi">
+<a href="#section-9.1" class="section-number selfRef">9.1. </a><a href="#name-oauth-extensions-error-regi" class="section-name selfRef">OAuth Extensions Error Registry</a>
+        </h3>
+<p id="section-9.1-1">This document requests registration of the following value in the "OAuth Extensions Error Registry" established by <span>[<a href="#RFC6749" class="cite xref">RFC6749</a>]</span>:<a href="#section-9.1-1" class="pilcrow">¶</a></p>
+<span class="break"></span><dl class="dlParallel" id="section-9.1-2">
+          <dt id="section-9.1-2.1">Name:</dt>
+          <dd style="margin-left: 1.5em" id="section-9.1-2.2">approval_required<a href="#section-9.1-2.2" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-9.1-2.3">Usage Location:</dt>
+          <dd style="margin-left: 1.5em" id="section-9.1-2.4">resource access error response<a href="#section-9.1-2.4" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-9.1-2.5">Protocol Extension:</dt>
+          <dd style="margin-left: 1.5em" id="section-9.1-2.6">Payment mandates<a href="#section-9.1-2.6" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-9.1-2.7">Change controller:</dt>
+          <dd style="margin-left: 1.5em" id="section-9.1-2.8">IETF<a href="#section-9.1-2.8" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-9.1-2.9">Specification document:</dt>
+          <dd style="margin-left: 1.5em" id="section-9.1-2.10">
+            <a href="#error-response" class="auto internal xref">Section 5.2</a> of this document<a href="#section-9.1-2.10" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+</dl>
+</section>
+<section id="section-9.2">
+        <h3 id="name-oauth-authorization-server-">
+<a href="#section-9.2" class="section-number selfRef">9.2. </a><a href="#name-oauth-authorization-server-" class="section-name selfRef">OAuth Authorization Server Metadata</a>
+        </h3>
+<p id="section-9.2-1">This document requests registration of the following value in the "OAuth Authorization Server Metadata" registry established by <span>[<a href="#RFC8414" class="cite xref">RFC8414</a>]</span>:<a href="#section-9.2-1" class="pilcrow">¶</a></p>
+<span class="break"></span><dl class="dlParallel" id="section-9.2-2">
+          <dt id="section-9.2-2.1">Metadata Name:</dt>
+          <dd style="margin-left: 1.5em" id="section-9.2-2.2">payment_mandate_time_zone<a href="#section-9.2-2.2" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-9.2-2.3">Metadata Description:</dt>
+          <dd style="margin-left: 1.5em" id="section-9.2-2.4">IANA time zone name in which payment mandate periods are counted<a href="#section-9.2-2.4" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-9.2-2.5">Change Controller:</dt>
+          <dd style="margin-left: 1.5em" id="section-9.2-2.6">IETF<a href="#section-9.2-2.6" class="pilcrow">¶</a>
+</dd>
+          <dd class="break"></dd>
+<dt id="section-9.2-2.7">Specification Document:</dt>
+          <dd style="margin-left: 1.5em" id="section-9.2-2.8">
+            <a href="#mandate-type" class="auto internal xref">Section 3.1</a> of this document<a href="#section-9.2-2.8" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+</dl>
+</section>
+<section id="section-9.3">
+        <h3 id="name-payment-mandate-reasons-reg">
+<a href="#section-9.3" class="section-number selfRef">9.3. </a><a href="#name-payment-mandate-reasons-reg" class="section-name selfRef">Payment Mandate Reasons Registry</a>
+        </h3>
+<p id="section-9.3-1">This document requests that IANA create a registry "Payment Mandate Reasons" with the registration policy Specification Required <span>[<a href="#RFC8126" class="cite xref">RFC8126</a>]</span>. Each entry has a reason name, a position in the evaluation order, a description, and a reference. The initial contents are the reasons in <a href="#reasons" class="auto internal xref">Section 4.2</a>. A new reason <span class="bcp14">MUST</span> state where it falls in the order.<a href="#section-9.3-1" class="pilcrow">¶</a></p>
+</section>
+<section id="section-9.4">
+        <h3 id="name-media-type-registration">
+<a href="#section-9.4" class="section-number selfRef">9.4. </a><a href="#name-media-type-registration" class="section-name selfRef">Media Type Registration</a>
+        </h3>
+<p id="section-9.4-1">This document requests registration of the media type <code>application/payment-receipt+jwt</code> for signed receipts as defined in <a href="#chain" class="auto internal xref">Section 6.2</a>. Template details will be completed in a later revision.<a href="#section-9.4-1" class="pilcrow">¶</a></p>
+</section>
+</section>
+</div>
+<section id="section-10">
+      <h2 id="name-references">
+<a href="#section-10" class="section-number selfRef">10. </a><a href="#name-references" class="section-name selfRef">References</a>
+      </h2>
+<section id="section-10.1">
+        <h3 id="name-normative-references">
+<a href="#section-10.1" class="section-number selfRef">10.1. </a><a href="#name-normative-references" class="section-name selfRef">Normative References</a>
+        </h3>
+<dl class="references">
+<dt id="RFC2119">[RFC2119]</dt>
+        <dd>
+<span class="refAuthor">Bradner, S.</span>, <span class="refTitle">"Key words for use in RFCs to Indicate Requirement Levels"</span>, <span class="seriesInfo">BCP 14</span>, <span class="seriesInfo">RFC 2119</span>, <span class="seriesInfo">DOI 10.17487/RFC2119</span>, <time datetime="1997-03" class="refDate">March 1997</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc2119">https://www.rfc-editor.org/info/rfc2119</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC3339">[RFC3339]</dt>
+        <dd>
+<span class="refAuthor">Klyne, G.</span> and <span class="refAuthor">C. Newman</span>, <span class="refTitle">"Date and Time on the Internet: Timestamps"</span>, <span class="seriesInfo">RFC 3339</span>, <span class="seriesInfo">DOI 10.17487/RFC3339</span>, <time datetime="2002-07" class="refDate">July 2002</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc3339">https://www.rfc-editor.org/info/rfc3339</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC6749">[RFC6749]</dt>
+        <dd>
+<span class="refAuthor">Hardt, D., Ed.</span>, <span class="refTitle">"The OAuth 2.0 Authorization Framework"</span>, <span class="seriesInfo">RFC 6749</span>, <span class="seriesInfo">DOI 10.17487/RFC6749</span>, <time datetime="2012-10" class="refDate">October 2012</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc6749">https://www.rfc-editor.org/info/rfc6749</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC7515">[RFC7515]</dt>
+        <dd>
+<span class="refAuthor">Jones, M.</span>, <span class="refAuthor">Bradley, J.</span>, and <span class="refAuthor">N. Sakimura</span>, <span class="refTitle">"JSON Web Signature (JWS)"</span>, <span class="seriesInfo">RFC 7515</span>, <span class="seriesInfo">DOI 10.17487/RFC7515</span>, <time datetime="2015-05" class="refDate">May 2015</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc7515">https://www.rfc-editor.org/info/rfc7515</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC8126">[RFC8126]</dt>
+        <dd>
+<span class="refAuthor">Cotton, M.</span>, <span class="refAuthor">Leiba, B.</span>, and <span class="refAuthor">T. Narten</span>, <span class="refTitle">"Guidelines for Writing an IANA Considerations Section in RFCs"</span>, <span class="seriesInfo">BCP 26</span>, <span class="seriesInfo">RFC 8126</span>, <span class="seriesInfo">DOI 10.17487/RFC8126</span>, <time datetime="2017-06" class="refDate">June 2017</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc8126">https://www.rfc-editor.org/info/rfc8126</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC8174">[RFC8174]</dt>
+        <dd>
+<span class="refAuthor">Leiba, B.</span>, <span class="refTitle">"Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words"</span>, <span class="seriesInfo">BCP 14</span>, <span class="seriesInfo">RFC 8174</span>, <span class="seriesInfo">DOI 10.17487/RFC8174</span>, <time datetime="2017-05" class="refDate">May 2017</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc8174">https://www.rfc-editor.org/info/rfc8174</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC8259">[RFC8259]</dt>
+        <dd>
+<span class="refAuthor">Bray, T., Ed.</span>, <span class="refTitle">"The JavaScript Object Notation (JSON) Data Interchange Format"</span>, <span class="seriesInfo">STD 90</span>, <span class="seriesInfo">RFC 8259</span>, <span class="seriesInfo">DOI 10.17487/RFC8259</span>, <time datetime="2017-12" class="refDate">December 2017</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc8259">https://www.rfc-editor.org/info/rfc8259</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC8414">[RFC8414]</dt>
+        <dd>
+<span class="refAuthor">Jones, M.</span>, <span class="refAuthor">Sakimura, N.</span>, and <span class="refAuthor">J. Bradley</span>, <span class="refTitle">"OAuth 2.0 Authorization Server Metadata"</span>, <span class="seriesInfo">RFC 8414</span>, <span class="seriesInfo">DOI 10.17487/RFC8414</span>, <time datetime="2018-06" class="refDate">June 2018</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc8414">https://www.rfc-editor.org/info/rfc8414</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC8785">[RFC8785]</dt>
+        <dd>
+<span class="refAuthor">Rundgren, A.</span>, <span class="refAuthor">Jordan, B.</span>, and <span class="refAuthor">S. Erdtman</span>, <span class="refTitle">"JSON Canonicalization Scheme (JCS)"</span>, <span class="seriesInfo">RFC 8785</span>, <span class="seriesInfo">DOI 10.17487/RFC8785</span>, <time datetime="2020-06" class="refDate">June 2020</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc8785">https://www.rfc-editor.org/info/rfc8785</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC9396">[RFC9396]</dt>
+      <dd>
+<span class="refAuthor">Lodderstedt, T.</span>, <span class="refAuthor">Richer, J.</span>, and <span class="refAuthor">B. Campbell</span>, <span class="refTitle">"OAuth 2.0 Rich Authorization Requests"</span>, <span class="seriesInfo">RFC 9396</span>, <span class="seriesInfo">DOI 10.17487/RFC9396</span>, <time datetime="2023-05" class="refDate">May 2023</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc9396">https://www.rfc-editor.org/info/rfc9396</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+</dl>
+</section>
+<section id="section-10.2">
+        <h3 id="name-informative-references">
+<a href="#section-10.2" class="section-number selfRef">10.2. </a><a href="#name-informative-references" class="section-name selfRef">Informative References</a>
+        </h3>
+<dl class="references">
+<dt id="CIBA">[CIBA]</dt>
+        <dd>
+<span class="refAuthor">Fernandez, G.</span>, <span class="refAuthor">Walter, F.</span>, <span class="refAuthor">Nennker, A.</span>, <span class="refAuthor">Tonge, D.</span>, and <span class="refAuthor">B. Campbell</span>, <span class="refTitle">"OpenID Connect Client-Initiated Backchannel Authentication Flow - Core 1.0"</span>, <time datetime="2021-09" class="refDate">September 2021</time>, <span>&lt;<a href="https://openid.net/specs/openid-client-initiated-backchannel-authentication-core-1_0.html">https://openid.net/specs/openid-client-initiated-backchannel-authentication-core-1_0.html</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="GDPR">[GDPR]</dt>
+        <dd>
+<span class="refAuthor">European Parliament and Council of the European Union</span>, <span class="refTitle">"Regulation (EU) 2016/679 (General Data Protection Regulation)"</span>, <time datetime="2016-04" class="refDate">April 2016</time>, <span>&lt;<a href="https://eur-lex.europa.eu/eli/reg/2016/679/oj">https://eur-lex.europa.eu/eli/reg/2016/679/oj</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="I-D.chen-oauth-agent-authz-use-cases">[I-D.chen-oauth-agent-authz-use-cases]</dt>
+        <dd>
+<span class="refAuthor">Chen, M.</span>, <span class="refAuthor">Chen, J.</span>, <span class="refAuthor">Yao, J.</span>, <span class="refAuthor">Jiang, Y.</span>, and <span class="refAuthor">P. Liu</span>, <span class="refTitle">"Agent Authorization use cases and gap analysis"</span>, <span class="refContent">Work in Progress</span>, <span class="seriesInfo">Internet-Draft, draft-chen-oauth-agent-authz-use-cases-05</span>, <time datetime="2026-10" class="refDate">October 2026</time>, <span>&lt;<a href="https://datatracker.ietf.org/doc/draft-chen-oauth-agent-authz-use-cases/">https://datatracker.ietf.org/doc/draft-chen-oauth-agent-authz-use-cases/</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="I-D.rosomakho-oauth-txn-challenge">[I-D.rosomakho-oauth-txn-challenge]</dt>
+        <dd>
+<span class="refAuthor">Rosomakho, Y.</span>, <span class="refAuthor">Campbell, B.</span>, <span class="refAuthor">McGuinness, K.</span>, and <span class="refAuthor">P. Kasselman</span>, <span class="refTitle">"OAuth Transaction Authorization Challenge"</span>, <span class="refContent">Work in Progress</span>, <span class="seriesInfo">Internet-Draft, draft-rosomakho-oauth-txn-challenge-00</span>, <time datetime="2026-06" class="refDate">June 2026</time>, <span>&lt;<a href="https://datatracker.ietf.org/doc/draft-rosomakho-oauth-txn-challenge/">https://datatracker.ietf.org/doc/draft-rosomakho-oauth-txn-challenge/</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="POPIA">[POPIA]</dt>
+        <dd>
+<span class="refAuthor">Republic of South Africa</span>, <span class="refTitle">"Protection of Personal Information Act 4 of 2013"</span>, <time datetime="2013-11" class="refDate">November 2013</time>, <span>&lt;<a href="https://www.gov.za/documents/protection-personal-information-act">https://www.gov.za/documents/protection-personal-information-act</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC7942">[RFC7942]</dt>
+        <dd>
+<span class="refAuthor">Sheffer, Y.</span> and <span class="refAuthor">A. Farrel</span>, <span class="refTitle">"Improving Awareness of Running Code: The Implementation Status Section"</span>, <span class="seriesInfo">BCP 205</span>, <span class="seriesInfo">RFC 7942</span>, <span class="seriesInfo">DOI 10.17487/RFC7942</span>, <time datetime="2016-07" class="refDate">July 2016</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc7942">https://www.rfc-editor.org/info/rfc7942</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC9449">[RFC9449]</dt>
+      <dd>
+<span class="refAuthor">Fett, D.</span>, <span class="refAuthor">Campbell, B.</span>, <span class="refAuthor">Bradley, J.</span>, <span class="refAuthor">Lodderstedt, T.</span>, <span class="refAuthor">Jones, M.</span>, and <span class="refAuthor">D. Waite</span>, <span class="refTitle">"OAuth 2.0 Demonstrating Proof of Possession (DPoP)"</span>, <span class="seriesInfo">RFC 9449</span>, <span class="seriesInfo">DOI 10.17487/RFC9449</span>, <time datetime="2023-09" class="refDate">September 2023</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc9449">https://www.rfc-editor.org/info/rfc9449</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+</dl>
+</section>
+</section>
+<div id="examples">
+<section id="appendix-A">
+      <h2 id="name-examples">
+<a href="#appendix-A" class="section-number selfRef">Appendix A. </a><a href="#name-examples" class="section-name selfRef">Examples</a>
+      </h2>
+<p id="appendix-A-1">A mandate as granted, as it appears in <code>authorization_details</code>:<a href="#appendix-A-1" class="pilcrow">¶</a></p>
+<div class="lang-json sourcecode" id="appendix-A-2">
+<pre>
+{
+  "type": "payment_mandate",
+  "actions": ["pay_existing_beneficiary"],
+  "accounts": ["acc_4821"],
+  "payees": ["ben_water", "ben_city_power"],
+  "approval": "within_limits",
+  "limits": {
+    "per_payment": {"amount": "1000.00", "currency": "ZAR"},
+    "per_period": {"amount": "2000.00", "currency": "ZAR",
+                   "count": 4, "period": "month"},
+    "approve_above": {"amount": "500.00", "currency": "ZAR"}
+  },
+  "valid_until": "2027-02-15T23:59:59+02:00",
+  "intent": "Pay my monthly utility bills"
+}
+</pre><a href="#appendix-A-2" class="pilcrow">¶</a>
+</div>
+<p id="appendix-A-3">A payment to a saved beneficiary that is not one of the mandate's payees, without the transaction challenge:<a href="#appendix-A-3" class="pilcrow">¶</a></p>
+<div class="lang-http-message sourcecode" id="appendix-A-4">
+<pre>
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{
+  "error": "approval_required",
+  "error_description": "Sunrise Primary School is not one of the
+    payees you chose for this agent",
+  "reason": "payee_not_on_mandate",
+  "payment_id": "pi_8Qm2Lk",
+  "authorization_details": [{
+    "type": "single_payment",
+    "from": "acc_4821",
+    "to": {"name": "Sunrise Primary School", "account": "62114930"},
+    "amount": {"amount": "450.00", "currency": "ZAR"},
+    "reference": "Term 4"
+  }]
+}
+</pre><a href="#appendix-A-4" class="pilcrow">¶</a>
+</div>
+<p id="appendix-A-5">The receipt for the payment once approved and completed:<a href="#appendix-A-5" class="pilcrow">¶</a></p>
+<div class="lang-json sourcecode" id="appendix-A-6">
+<pre>
+{
+  "seq": 42, "prev": "sha256:9c1e...",
+  "time": "2026-11-17T10:42:07+02:00",
+  "grant_id": "g_3fa8", "mandate_version": 1, "client_id": "kaya",
+  "action": "payment", "outcome": "allowed", "basis": "approval",
+  "reason": "payee_not_on_mandate", "approval_id": "ar_51b0",
+  "payment_id": "pi_8Qm2Lk", "idempotency_key": "school-term4-2026",
+  "institution_payment_id": "bp_Jx41",
+  "policy": {"version": "CHG-2026-1182", "hash": "sha256:4be0..."},
+  "personal": {
+    "payment": "sha256:...",
+    "intent": "sha256:...",
+    "agent_instruction": "sha256:..."
+  }
+}
+</pre><a href="#appendix-A-6" class="pilcrow">¶</a>
+</div>
+</section>
+</div>
+<div id="impl-status">
+<section id="appendix-B">
+      <h2 id="name-implementation-status">
+<a href="#appendix-B" class="section-number selfRef">Appendix B. </a><a href="#name-implementation-status" class="section-name selfRef">Implementation Status</a>
+      </h2>
+<p id="appendix-B-1">This section is to be removed before publishing as an RFC.<a href="#appendix-B-1" class="pilcrow">¶</a></p>
+<p id="appendix-B-2">This section records the status of known implementations of the protocol defined by this specification at the time of posting of this Internet-Draft, and is based on a proposal described in <span>[<a href="#RFC7942" class="cite xref">RFC7942</a>]</span>.<a href="#appendix-B-2" class="pilcrow">¶</a></p>
+<span class="break"></span><dl class="dlParallel" id="appendix-B-3">
+        <dt id="appendix-B-3.1">Organization:</dt>
+        <dd style="margin-left: 1.5em" id="appendix-B-3.2">Veridact Valet open-source project<a href="#appendix-B-3.2" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+<dt id="appendix-B-3.3">Name:</dt>
+        <dd style="margin-left: 1.5em" id="appendix-B-3.4">Veridact Valet, https://github.com/richard-craig/veridact-valet<a href="#appendix-B-3.4" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+<dt id="appendix-B-3.5">Description:</dt>
+        <dd style="margin-left: 1.5em" id="appendix-B-3.6">A reference authorization server, resource-server enforcement, approval flow (CIBA) and receipt log for agents acting on bank accounts, with a direct API (DPoP-bound) and an MCP gateway for AI assistants.<a href="#appendix-B-3.6" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+<dt id="appendix-B-3.7">Maturity:</dt>
+        <dd style="margin-left: 1.5em" id="appendix-B-3.8">Proof of concept, with a conformance test suite for every reason in <a href="#reasons" class="auto internal xref">Section 4.2</a> and for the receipt format.<a href="#appendix-B-3.8" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+<dt id="appendix-B-3.9">Coverage:</dt>
+        <dd style="margin-left: 1.5em" id="appendix-B-3.10">All of this document, under earlier type names (<code>valet_payments</code>, <code>valet_payment_once</code>) and with the approval mode values <code>approved_payer</code> and <code>bill_payer</code>. Payee details are not yet committed outside the chain (<a href="#personal" class="auto internal xref">Section 6.3</a>).<a href="#appendix-B-3.10" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+<dt id="appendix-B-3.11">Licensing:</dt>
+        <dd style="margin-left: 1.5em" id="appendix-B-3.12">Apache-2.0<a href="#appendix-B-3.12" class="pilcrow">¶</a>
+</dd>
+        <dd class="break"></dd>
+<dt id="appendix-B-3.13">Contact:</dt>
+        <dd style="margin-left: 1.5em" id="appendix-B-3.14">Richard Craig, richard1gb@gmail.com<a href="#appendix-B-3.14" class="pilcrow">¶</a>
+</dd>
+      <dd class="break"></dd>
+</dl>
+</section>
+</div>
+<div id="acknowledgments">
+<section id="appendix-C">
+      <h2 id="name-acknowledgments">
+<a href="#name-acknowledgments" class="section-name selfRef">Acknowledgments</a>
+      </h2>
+<p id="appendix-C-1">The approval challenge this document builds on is the work of the authors of <span>[<a href="#I-D.rosomakho-oauth-txn-challenge" class="cite xref">I-D.rosomakho-oauth-txn-challenge</a>]</span>.<a href="#appendix-C-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="authors-addresses">
+<section id="appendix-D">
+      <h2 id="name-authors-address">
+<a href="#name-authors-address" class="section-name selfRef">Author's Address</a>
+      </h2>
+<address class="vcard">
+        <div dir="auto" class="left"><span class="fn nameRole">Richard Craig</span></div>
+<div dir="auto" class="left"><span class="org">Independent</span></div>
+<div dir="auto" class="left"><span class="country-name">South Africa</span></div>
+<div class="email">
+<span>Email:</span>
+<a href="mailto:richard1gb@gmail.com" class="email">richard1gb@gmail.com</a>
+</div>
+</address>
+</section>
+</div>
+<script>const toc = document.getElementById("toc");
+toc.querySelector("h2").addEventListener("click", e => {
+  toc.classList.toggle("active");
+});
+toc.querySelector("nav").addEventListener("click", e => {
+  toc.classList.remove("active");
+});
+</script>
+</body>
+</html>

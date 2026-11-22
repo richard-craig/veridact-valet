@@ -12,6 +12,7 @@ from ..common.signers import KeyRing, jws_kid
 from .config import BankConfig
 from .core import CoreBanking, DemoCore
 from .idp import OidcConfig, OidcSignIn
+from .known_assistants import KnownAssistants
 from .payments import Payments
 from .policy import Policy
 from .receipts import Receipts
@@ -69,6 +70,11 @@ class Bank:
         # The bank's policy in force: hashed, kept, and named on every receipt from here on (design section 8.2).
         self.policy = Policy(self.store, self.cfg, self.key_binding)
         self.receipts.policy = self.policy
+        # Set by create_app: the Valet decision service, and how the bank's MCP server reaches it.
+        self.decision_service: Any = None
+        self.decisions: Any = None
+        # Lane A: Veridact known-assistant entries for mainstream assistants (known_assistants.py), if configured.
+        self.known_assistants: KnownAssistants | None = KnownAssistants.from_env()
 
     # ------------------------------------------------- deployment safety
     def _key_binding_mode(self) -> str:
@@ -96,8 +102,15 @@ class Bank:
                 "denylist_entries": self.store.one("SELECT COUNT(*) n FROM denylist")["n"],
                 "payments_escalated": len(self.payments.escalated()),
                 "native_issuers": sorted(self.external_issuers),
+                "known_assistants": self.known_assistants.readiness() if self.known_assistants else None,
+                "decision_service": getattr(self.decisions, "transport", None),
                 "policy": {**self.policy.ref, "labelled": self.policy.labelled},
                 "keys": {"as": self.as_keys.custody(), "receipts": self.receipt_keys.custody()}}
+
+    def assistant(self, client_id: str) -> dict[str, Any] | None:
+        """Lane A: what Veridact's known-assistant entry says about this platform client, or None if not covered."""
+        known = self.known_assistants
+        return known.check(client_id) if known and known.covers(client_id) else None
 
     def native_issuer(self, hint: str | None = None) -> str | None:
         """The token issuer a native-mode grant is bound to: the one named, or the only one configured."""
@@ -216,6 +229,7 @@ class Bank:
         claims: dict[str, Any] = {
             "iss": self.cfg.issuer, "aud": self.cfg.api_audience, "sub": grant["sub"], "client_id": grant["client_id"],
             "grant_id": grant["id"], "authorization_details": details, "cnf": {"jkt": jkt},
+            "act": {"sub": grant["client_id"]},           # RFC 8693: the agent acts for the customer in "sub"
             "iat": now, "exp": int(exp) if exp else now + self.cfg.access_ttl, "jti": f"at_{now}_{id(details)}_{time.time_ns()}",
         }
         if approval:

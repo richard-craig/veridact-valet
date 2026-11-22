@@ -1,6 +1,6 @@
 # Veridact Valet: MCP Gateway & AI Assistant Connectors – Design
 
-Draft v0.5 · 22 November 2026 · Pilot built: `valet/bank/mcp.py` is a **reference example** of a bank MCP server, built against Keycloak (see the README). PingFederate, ChatGPT, Copilot and Gemini remain design. v0.4 added the two-lane model and Veridact known-assistant entries. v0.5 makes Valet and Veridact **sidecars**: the bank owns the MCP server, and Valet is the decision service it asks ([Decision service](decision-service.md)).
+Draft v0.6 · 22 November 2026 · Pilot built: `valet/bank/mcp.py` is a **reference example** of a bank MCP server, built against Keycloak (see the README). PingFederate, ChatGPT, Copilot and Gemini remain design. v0.4 added the two-lane model and Veridact known-assistant entries. v0.5 makes Valet and Veridact **sidecars**: the bank owns the MCP server, and Valet is the decision service it asks ([Decision service](decision-service.md)). **v0.6 builds that:** the MCP server asks the decision service before every call (over HTTP in the demo stack), checks Claude's Veridact known-assistant entry and status list itself, and Keycloak's tokens carry an RFC 8693 `act` claim.
 
 ## Summary
 
@@ -64,7 +64,7 @@ verify; they never sit in the request path.
 
 Anthropic, OpenAI, Google and Microsoft will not present Veridact attestations, so Veridact signs a statement *about* each platform. It is the allowlist the gateway already needs, made shareable and withdrawable across banks.
 
-An entry is an SD-JWT VC issued by Veridact with `vct` `https://veridact.net/vct/known-assistant/v1`. Its canonical definition is in the [Veridact v0.5 proposal, §6](https://github.com/richard-craig/veridact/blob/main/docs/proposals/0.5-sd-jwt-vc.md); the summary here must match it. It contains:
+An entry is an SD-JWT VC issued by Veridact with `vct` `https://veridact.net/vct/known-assistant/v1`. Its canonical definition is in the [Veridact v0.5 proposal, §6](https://github.com/veridactlabs/veridact/blob/main/docs/proposals/0.5-sd-jwt-vc.md); the summary here must match it. It contains:
 
 - `operator`: the verified legal entity (for example Anthropic PBC), its jurisdiction and verification date
 - `client_metadata_urls`: the platform's Client ID Metadata Document URLs (for example Claude's, and Claude Code's at `https://claude.ai/oauth/claude-code-client-metadata`)

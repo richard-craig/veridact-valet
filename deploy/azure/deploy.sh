@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Deploy the Veridact Valet demo (native Keycloak stack) to one Azure VM, HTTPS on four subdomains.
+# Deploy the Veridact Valet demo (native Keycloak stack) to one Azure VM, HTTPS on five subdomains.
 #
 # Run in Azure Cloud Shell (bash) or anywhere the Azure CLI is signed in:
 #
 #   SUBSCRIPTION="CoffeeMedicine" DNS_ZONE="example.co.za" DNS_ZONE_RG="rg-dns" \
 #   ADMIN_CIDR="196.x.x.x/32" ./deploy/azure/deploy.sh
 #
-# Creates: resource group, static public IP, A records bank/kaya/acme/login.<LABEL>.<DNS_ZONE>, an NSG (80 and 443
+# Creates: resource group, static public IP, A records bank/kaya/acme/login/veridact.<LABEL>.<DNS_ZONE>, an NSG (80 and 443
 # open; 22 from ADMIN_CIDR only), and an Ubuntu VM whose first boot installs Docker, checks out the demo branch,
 # writes .env with fresh secrets and starts the stack. Secrets are also saved next to you in valet-demo-secrets.env.
 #
@@ -27,16 +27,16 @@ RG="${RG:-rg-valet-demo}"
 LOCATION="${LOCATION:-southafricanorth}"
 VM="${VM:-vm-valet-demo}"
 VM_SIZE="${VM_SIZE:-Standard_B2ms}"          # 2 vCPU, 8 GiB: Keycloak plus four small services
-REPO="${REPO:-https://github.com/richard-craig/veridact-valet.git}"
+REPO="${REPO:-https://github.com/veridactlabs/veridact-valet.git}"
 BRANCH="${BRANCH:-main}"
 AUTO_SHUTDOWN_UTC="${AUTO_SHUTDOWN_UTC:-}"    # e.g. 1900 = 21:00 SAST; empty = none
 KEY_VAULT="${KEY_VAULT:-}"                    # 1 = keys and secrets in Azure Key Vault (see above)
-SECRET_NAMES="KC_ADMIN_PASSWORD DEMO_PASSWORD CLAUDE_CLIENT_SECRET BANK_CLIENT_SECRET BANK_SESSION_SECRET VALET_HANDOFF_SECRET VALET_INTERNAL_SECRET"
+SECRET_NAMES="KC_ADMIN_PASSWORD DEMO_PASSWORD CLAUDE_CLIENT_SECRET BANK_CLIENT_SECRET BANK_SESSION_SECRET VALET_HANDOFF_SECRET VALET_INTERNAL_SECRET VALET_DECISION_SECRET VERIDACT_ADMIN_SECRET"
 kvname() { echo "$1" | tr 'A-Z_' 'a-z-'; }    # BANK_SESSION_SECRET -> bank-session-secret
 
 sfx="${LABEL:+.$LABEL}"
 BANK_HOST="bank${sfx}.${DNS_ZONE}"; KAYA_HOST="kaya${sfx}.${DNS_ZONE}"
-ACME_HOST="acme${sfx}.${DNS_ZONE}"; IDP_HOST="login${sfx}.${DNS_ZONE}"
+ACME_HOST="acme${sfx}.${DNS_ZONE}"; IDP_HOST="login${sfx}.${DNS_ZONE}"; VERIDACT_HOST="veridact${sfx}.${DNS_ZONE}"
 secret() { openssl rand -base64 36 | tr -d '/+=' | cut -c1-40; }
 
 echo "==> Subscription and resource group"
@@ -49,7 +49,7 @@ IP=$(az network public-ip show -g "$RG" -n "pip-$VM" --query ipAddress -o tsv)
 echo "    $IP"
 
 echo "==> DNS A records in $DNS_ZONE"
-for h in bank kaya acme login; do
+for h in bank kaya acme login veridact; do
   name="${h}${sfx}"
   az network dns record-set a create -g "$DNS_ZONE_RG" -z "$DNS_ZONE" -n "$name" --ttl 300 -o none 2>/dev/null || true
   for old in $(az network dns record-set a show -g "$DNS_ZONE_RG" -z "$DNS_ZONE" -n "$name" --query "ARecords[].ipv4Address" -o tsv 2>/dev/null); do
@@ -109,6 +109,13 @@ VALET_INTERNAL_SECRET=$VALET_INTERNAL_SECRET
 EOF
   echo "    saved to $SECRETS_FILE (keep it; re-runs reuse it)"
 fi
+# Added later (decision service, Veridact attester): generated once, also for a secrets file from an earlier run.
+# With KEY_VAULT they are in SECRET_NAMES, so the vault creates them and the VM reads them from there.
+if [ -z "$KEY_VAULT" ]; then
+  for v in VALET_DECISION_SECRET VERIDACT_ADMIN_SECRET; do
+    if [ -z "${!v:-}" ]; then val=$(secret); printf -v "$v" '%s' "$val"; (umask 077; echo "$v=$val" >> "$SECRETS_FILE"); fi
+  done
+fi
 
 echo "==> First-boot script"
 BOOT=$(mktemp)
@@ -126,10 +133,12 @@ BANK_URL=https://$BANK_HOST
 KAYA_URL=https://$KAYA_HOST
 ACME_URL=https://$ACME_HOST
 IDP_URL=https://$IDP_HOST
+VERIDACT_URL=https://$VERIDACT_HOST
 BANK_HOST=$BANK_HOST
 KAYA_HOST=$KAYA_HOST
 ACME_HOST=$ACME_HOST
 IDP_HOST=$IDP_HOST
+VERIDACT_HOST=$VERIDACT_HOST
 ADMIN_CIDR=$ADMIN_CIDR
 ENVEOF
 $(if [ -n "$KEY_VAULT" ]; then cat <<KVEOF
@@ -199,14 +208,17 @@ Veridact Valet demo
   Acme Budgeting (third-party app)           https://$ACME_HOST
   Keycloak admin (from $ADMIN_CIDR only)     https://$IDP_HOST/admin   admin / \$KC_ADMIN_PASSWORD
   Claude connector URL                       https://$BANK_HOST/mcp    client id: claude   secret: \$CLAUDE_CLIENT_SECRET
+  Bank operations (decisions, kill switch)   https://$BANK_HOST/ops
+  Veridact attester (suspend Claude)         https://$VERIDACT_HOST/admin   secret: \$VERIDACT_ADMIN_SECRET
   Secrets                                    ${KEY_VAULT:+Key Vault $KV_NAME (az keyvault secret show --vault-name $KV_NAME -n demo-password)}${KEY_VAULT:-$SECRETS_FILE}
   Key custody                                https://$BANK_HOST/readyz  ("keys")
 
 Check it from your laptop (repository checkout, Python 3.11+):
   BANK_URL=https://$BANK_HOST KAYA_URL=https://$KAYA_HOST ACME_URL=https://$ACME_HOST \\
+  VERIDACT_URL=https://$VERIDACT_HOST VERIDACT_ADMIN_SECRET=... \\
   DEMO_PASSWORD=... CLAUDE_CLIENT_SECRET=... python scripts/preflight.py
 
 On the VM:  ssh azureuser@$IP   then   sudo /opt/valet/valet.sh status|logs|reset|update
 Remove:     az group delete -n $RG --yes
-            for h in bank kaya acme login; do az network dns record-set a delete -g $DNS_ZONE_RG -z $DNS_ZONE -n \$h$sfx --yes; done
+            for h in bank kaya acme login veridact; do az network dns record-set a delete -g $DNS_ZONE_RG -z $DNS_ZONE -n \$h$sfx --yes; done
 DONE
