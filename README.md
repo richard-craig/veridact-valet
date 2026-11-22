@@ -14,7 +14,8 @@ This repository holds the design and a working proof of concept. The design is i
 - [Threat model](docs/threat-model.md): the controls on each journey (direct agents and AI assistants), their status, and the known gaps.
 - [The Valet profile](docs/valet-profile.md): the shared permission standard in one place. Access levels, approval rules, check order, error codes and receipt format, each marked built or specified.
 - [Technical design](docs/technical-design.md): the profile, data model, flows, check order, receipts, security and identity-provider support.
-- [MCP gateway design](docs/mcp-gateway-design.md) (draft, not yet built): how Claude, ChatGPT, Copilot and Gemini connect through a bank-run MCP gateway.
+- [MCP gateway design](docs/mcp-gateway-design.md) (draft, not yet built): how Claude, ChatGPT, Copilot and Gemini connect through the bank's own MCP server, with Valet and Veridact as sidecars.
+- [Decision service](docs/decision-service.md) (draft, not yet built): Valet as a decision service the bank's servers call over the OpenID AuthZEN Authorization API, the reserve, commit and release extension, the shared store, and how concurrent and repeated payments are handled.
 - [Veridact agent identity](docs/veridact-agent-identity.md) (draft, not yet built): how Valet knows which agent it is talking to, using client attestation, SD-JWT VC and Token Status List, plus known-assistant entries for Claude, ChatGPT, Gemini and Copilot.
 - [Control framework mapping](docs/control-framework-mapping.md): Valet against a bank control framework for AI agents (autonomy tiers, assurance states, the minimum evidence set, stopping an agent, board questions) and against South African, EU and UK regulation.
 
@@ -90,7 +91,11 @@ Types: `account_information`, `payment_initiation`, `recurring_payment`, `custom
 covers the rules. In the PoC the Consent Service and Valet's agent grants are separate stores; a bank deployment
 converges them on the consent store.
 
-## Claude through the bank's MCP gateway
+## Claude through the bank's MCP server (reference example)
+
+> **Example, not product.** The MCP server belongs to the bank. `valet/bank/mcp.py` is a reference example that
+> shows bank developers each step their own server must take. In the target design, Valet is a decision service
+> beside it ([decision service](docs/decision-service.md)).
 
 `/mcp` on the bank is a Streamable HTTP MCP server ([design](docs/mcp-gateway-design.md)). Claude signs in through
 the bank's IdP (Keycloak), the customer builds the mandate on the bank's consent screen, and every tool call is

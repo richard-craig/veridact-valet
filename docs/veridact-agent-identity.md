@@ -53,6 +53,19 @@ Valet answers the other question, *what did the customer allow?*, and does not c
 | **Veridact (attester and issuer)** | Run by Veridact, or by a consortium or a bank itself | Issuer keys, the status list, the operator register |
 | **Relying organisation** | A bank, insurer or other deployer | Its own authorization server (any vendor) and Valet |
 
+### Veridact has two halves
+
+| Half | Where it runs | What it does |
+|---|---|---|
+| **Verifier** (sidecar) | Inside the bank, beside its authorization server (and callable by its MCP server and APIs) | Checks attestations, PoPs, CIMD documents and operator credentials; reads status from **locally cached** status lists. No outside call per request. |
+| **Attester and status lists** | Outside the bank: run by Veridact, a consortium or a bank | Verifies operators, issues credentials and attestations, publishes status lists |
+
+The verifier syncs the status lists on their `ttl` (5 minutes in the pilot), so a withdrawal reaches every bank
+within one cache period. If the cache is older than its limit and can't be refreshed, the verifier fails closed
+for payments and can still allow view-only access, by bank policy. The verifier is exposed to the bank's
+components as a small local API; its result is passed to the Valet decision service in the AuthZEN `subject`
+(see [Decision service](decision-service.md)).
+
 Any organisation can run its own Veridact attester. Relying organisations choose which attesters they trust,
 exactly as browsers choose which CAs they trust. That keeps Veridact from becoming a single point of failure.
 

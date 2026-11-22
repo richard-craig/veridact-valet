@@ -1,14 +1,15 @@
 # Veridact Valet: MCP Gateway & AI Assistant Connectors – Design
 
-Draft v0.4 · 22 November 2026 · Pilot built: `valet/bank/mcp.py` implements the pilot tool surface against Keycloak (see the README). PingFederate, ChatGPT, Copilot and Gemini remain design. v0.4 adds the two-lane model and Veridact known-assistant entries.
+Draft v0.5 · 22 November 2026 · Pilot built: `valet/bank/mcp.py` is a **reference example** of a bank MCP server, built against Keycloak (see the README). PingFederate, ChatGPT, Copilot and Gemini remain design. v0.4 added the two-lane model and Veridact known-assistant entries. v0.5 makes Valet and Veridact **sidecars**: the bank owns the MCP server, and Valet is the decision service it asks ([Decision service](decision-service.md)).
 
 ## Summary
 
-Valet's next feature is a bank-run MCP gateway: the front door that lets Claude and ChatGPT reach a customer's account under a written mandate, without passwords and without screen-scraping. Microsoft Copilot (via Copilot Studio) and Gemini (Enterprise and the consumer app) follow on the same gateway, with per-platform client registration only.
+The bank's own MCP server is the front door that lets Claude and ChatGPT reach a customer's account under a written mandate, without passwords and without screen-scraping. Microsoft Copilot (via Copilot Studio) and Gemini (Enterprise and the consumer app) follow through the same server, with per-platform client registration only. Valet ships a reference example of that server, so developers can see every step; banks adopt it, copy it or build their own.
 
 Key decisions:
 
-- **Bank-deployed, not hosted.** Each bank runs the gateway inside its own boundary, on its existing identity platform. No aggregator, no Valet-held bank tokens.
+- **The bank owns the front door; Valet and Veridact run beside it.** The bank's MCP server and APIs enforce. On every call they ask the Valet decision service, over the OpenID AuthZEN Authorization API, plus a small reserve, commit and release extension for money ([Decision service](decision-service.md)). The bank's authorization server asks the Veridact verifier which agent it is talking to. Neither sidecar sits in the request path.
+- **Bank-deployed, not hosted.** Each bank runs the MCP server, Valet and the Veridact verifier inside its own boundary, on its existing identity platform. No aggregator, no Valet-held bank tokens.
 - **One policy decision per call.** The bank issues both account access and the agent mandate, so the gateway enforces a single intersection, not two separate grants.
 - **Bearer tokens are accepted, but made boring to steal.** Claude and ChatGPT cannot send DPoP today. Short-lived, audience-bound tokens, confidential clients and in-app payment approval cap what a stolen token can do.
 - **Mandate ceilings follow token assurance.** Bearer clients get read-only plus approve-every-payment; DPoP-bound or Veridact-verified agents can earn higher limits.
@@ -18,12 +19,32 @@ The gateway is how agents connect. The product is still mandates, enforcement an
 
 ## Two lanes into the bank
 
-Agents reach a bank's accounts in one of two lanes. The more a client can prove, the more it can do without asking.
+Agents reach a bank's accounts in one of two lanes. Both come in through the bank's own front door, with Valet and Veridact beside it; what differs is what the client can prove. The more a client can prove, the more it can do without asking.
+
+```
+            agents (Lane A assistants · Lane B purpose-built)
+                 │                          │
+ ┌─ bank ────────▼──────────────────────────▼────────────────────────┐
+ │  authorization server  ──consent hand-off──►  MCP server or API    │
+ │        │                       │                    │              │
+ │        ▼                       ▼                    ▼              │
+ │  Veridact verifier       Valet decision service ◄── asks on every  │
+ │  (which agent?)          (is it allowed?)           call; reports  │
+ │        ▲                  shared store              commit/release │
+ │        │                                            │              │
+ └────────┼────────────────────────────────────────────▼──────────────┘
+          │ status lists, cached              payments and bank app
+   Veridact attester (outside the bank)
+```
+
+The bank's authorization server, MCP server, APIs and payment system enforce. Valet and Veridact decide and
+verify; they never sit in the request path.
 
 | | Lane A: mainstream assistants | Lane B: purpose-built agents |
 | --- | --- | --- |
 | Examples | Claude, ChatGPT, Gemini, Copilot | A fintech money assistant (the fictional Kaya), an insurer's claims bot |
-| Route | This MCP gateway | Valet's direct API ([Technical design](technical-design.md)) |
+| Front door (owned by the bank) | The bank's MCP server (Valet ships a reference example) | The bank's own API, or its MCP server |
+| Valet's role | Decision service the bank's server asks on every call (AuthZEN) | The same decision service, same API |
 | Who the OAuth client is | The platform: one client for every user of that assistant | The operator's agent, per instance |
 | How it identifies itself | Pre-registered confidential client per platform per bank; or an allowlisted Client ID Metadata Document | Client ID Metadata Document plus a Veridact client attestation bound to the instance's key ([Veridact agent identity](veridact-agent-identity.md)) |
 | Token | Bearer, short-lived, audience-bound | DPoP-bound, via PAR and RAR |
@@ -36,7 +57,7 @@ Agents reach a bank's accounts in one of two lanes. The more a client can prove,
 1. **Connect.** The customer adds the bank as a connector. The assistant gets a `401`, reads the gateway's protected resource metadata and the authorization server metadata, and identifies itself with the client the bank registered for that platform (see [Connector build: Claude](#connector-build-claude) and the sections after it).
 2. **Admit.** The gateway checks the client against Veridact's **known-assistant entries** (below). The platform never presents anything to Veridact; Veridact vouches for it.
 3. **Consent.** The customer signs in with the bank's MFA and builds the mandate on Valet's consent screen. The assistant never sends `authorization_details`; the bank's screen creates them.
-4. **Act.** The assistant calls gateway tools such as `bank.pay_existing_payee`. The gateway is the confidential, sender-constrained client to the bank's APIs, and checks the mandate on every call.
+4. **Act.** The assistant calls the bank's MCP tools such as `bank.pay_existing_payee`. Before acting, the bank's MCP server asks Valet (`POST /access/v1/evaluation`). An allowed payment comes back **reserved** against the mandate; the server sends it to the bank's payment system with the reservation id as the idempotency key, then reports `commit` or `release`.
 5. **Stop.** The customer disconnects in the bank app, or Veridact sets the assistant's status to withdrawn or suspended. Either way the next call fails.
 
 ### Veridact known-assistant entries

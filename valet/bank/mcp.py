@@ -1,5 +1,10 @@
 """
-Valet MCP gateway (docs/mcp-gateway-design.md): the bank-run front door for AI assistants such as Claude.
+REFERENCE EXAMPLE: a bank MCP server for AI assistants such as Claude (docs/mcp-gateway-design.md).
+
+The MCP server belongs to the bank. This module shows bank developers what their own server must do: validate the
+token, check every tool call against the live mandate, hold and report payments, and write receipts. Adopt it, copy
+it or build your own. In the target design (docs/decision-service.md) the checks below become calls to the Valet
+decision service over the AuthZEN Authorization API; this example still runs them in-process.
 
   Claude --MCP over Streamable HTTP, Bearer token--> /mcp   (this module, inside the bank)
   Claude --OAuth (auth code + PKCE, confidential client)--> the bank's IdP (Keycloak in the demo)
