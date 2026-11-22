@@ -64,7 +64,7 @@ verify; they never sit in the request path.
 
 Anthropic, OpenAI, Google and Microsoft will not present Veridact attestations, so Veridact signs a statement *about* each platform. It is the allowlist the gateway already needs, made shareable and withdrawable across banks.
 
-An entry is an SD-JWT VC issued by Veridact with `vct` `https://veridact.net/vct/known-assistant/v1`, containing:
+An entry is an SD-JWT VC issued by Veridact with `vct` `https://veridact.net/vct/known-assistant/v1`. Its canonical definition is in the [Veridact v0.5 proposal, §6](https://github.com/richard-craig/veridact/blob/main/docs/proposals/0.5-sd-jwt-vc.md); the summary here must match it. It contains:
 
 - `operator`: the verified legal entity (for example Anthropic PBC), its jurisdiction and verification date
 - `client_metadata_urls`: the platform's Client ID Metadata Document URLs (for example Claude's, and Claude Code's at `https://claude.ai/oauth/claude-code-client-metadata`)

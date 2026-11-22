@@ -60,7 +60,11 @@ nothing Valet-specific to build the request.
 | `context` | Tool arguments reach the decision **only if the mapping projects them**: anything not projected is not evaluated | Payee, amount, currency, idempotency key, the agent's stated reason |
 
 Valet adds facts the token gives the bank: `context.valet_grant` (the mandate id), `context.token_tier`
-(`bearer` or `dpop`) and `context.veridact` (the verifier's result). It also adds `channel`, `api` or `mcp`.
+(`bearer` or `dpop`) and `context.veridact` (the Veridact verifier's result: issuer, credential id, tier and the
+operator's delegation `limits`, or the known-assistant entry). Valet applies the **lower** of the mandate's limits
+and the delegation's, and counts the delegation's `per_day` against the agent across all its customers at this
+bank. How Veridact's own decisions map onto Valet's outcomes is in
+[Veridact agent identity](veridact-agent-identity.md#what-valet-does-with-veridacts-answer). It also adds `channel`, `api` or `mcp`.
 
 **Each Valet tool declares its mapping** in its `inputSchema` as `x-authzen-mapping`, which also appears in
 `tools/list`. The mapping for a payment tool **must project every argument that affects money** (account,
@@ -105,7 +109,11 @@ On the direct API (Lane B), the bank's API builds the same request from the HTTP
 | Needs the customer | `false` | `{"reason":"over_per_payment","evaluation_id":"…","access_request":{…},"valet":{"reservation":"r_…"}}` (see approvals below) |
 | Refused | `false` | `{"reason":"payee_not_on_mandate","evaluation_id":"…","valet":{"outcome":"declined","receipt":"…"}}` |
 
-- `context.reason` carries the draft's seven machine-readable reasons, in its fixed order. This is the same key
+- `context.reason` carries the seven machine-readable reasons of the [Valet profile](valet-profile.md) §3, in its
+  fixed order (`new_recipient`, `payee_not_on_mandate`, `over_per_payment`, `over_monthly_count`,
+  `over_monthly_limit`, `approved_payer`, `over_approval_threshold`). The Internet-Draft renames three of them
+  (`over_period_count`, `over_period_limit`, `every_payment`); the profile adopts the draft's names when it next
+  changes version, and until then Valet sends the profile's names. This is the same key
   the approval profile uses.
 - Everything else Valet-specific sits under `context.valet`. AuthZEN lets an enforcement point refuse a `true`
   decision whose context it does not understand, and Valet relies on that: an enforcement point that cannot read
@@ -257,7 +265,7 @@ COMMIT;
 ```
 
 - The two transactions queue on the mandate's lock. The first reserves R700; the second sees R300 left and gets
-  `approval_required` with reason `over_period_limit`.
+  `approval_required` with reason `over_monthly_limit`.
 - Only that one mandate is serialised. Every other customer's payments run in parallel.
 - **Held amounts count against the limit** (`reserved`, `sent`, `unknown`). Otherwise an agent could queue twenty
   "pending" payments to get around the monthly count.
