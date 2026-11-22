@@ -3,6 +3,11 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Request
 
+import os
+
+from ..decision import api as decision_api
+from ..decision.client import from_env as decisions_from_env
+from ..decision.service import DecisionService
 from . import api, authz, consents, grants, handoff, mcp, openbanking, web
 from .config import BankConfig
 from .context import Bank, OAuthError
@@ -42,6 +47,14 @@ def create_app(cfg: BankConfig | None = None, bank: Bank | None = None) -> FastA
     app.include_router(consent_api)
     app.include_router(consent_pages)
     app.include_router(openbanking.router(bank, svc))
+    # The Valet decision service (docs/decision-service.md): the bank's MCP server asks it before every action. It is
+    # published over HTTP for the bank's enforcement points (VALET_DECISION_SECRET), and reached in-process unless
+    # VALET_DECISION_URL points the MCP server at it over the network.
+    if getattr(bank, "decision_service", None) is None:
+        bank.decision_service = DecisionService(bank)
+    if getattr(bank, "decisions", None) is None:
+        bank.decisions = decisions_from_env(bank.decision_service)
+    app.include_router(decision_api.router(bank.decision_service, os.environ.get("VALET_DECISION_SECRET", "")))
     app.include_router(mcp.router(bank))
     return app
 
