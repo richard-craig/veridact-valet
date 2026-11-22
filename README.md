@@ -15,10 +15,10 @@ This repository holds the design and a working proof of concept. The design is i
 - [The Valet profile](docs/valet-profile.md): the shared permission standard in one place. Access levels, approval rules, check order, error codes and receipt format, each marked built or specified.
 - [The Valet insurance profile](docs/valet-insurance-profile.md): the same pattern for insurers. Policy, claim and change mandates, protected actions that always go back to the customer, and receipts that keep health data out of the chain. Proposed.
 - [Technical design](docs/technical-design.md): the profile, data model, flows, check order, receipts, security and identity-provider support.
-- [MCP gateway design](docs/mcp-gateway-design.md) (draft, not yet built): how Claude, ChatGPT, Copilot and Gemini connect through the bank's own MCP server, with Valet and Veridact as sidecars.
+- [MCP gateway design](docs/mcp-gateway-design.md) (draft; its core is built as the reference MCP server in `valet/bank/mcp.py`): how Claude, ChatGPT, Copilot and Gemini connect through the bank's own MCP server, with Valet and Veridact as sidecars.
 - [Poppy extension](docs/poppy-extension.md) (draft): Valet as a banking extension for the Personal Agent Protocol: standing mandates held by the bank, approval in the bank app, reasons and receipts, on top of Poppy's operations extension.
-- [Decision service](docs/decision-service.md) (draft, not yet built): Valet as a decision service the bank's servers call over the OpenID AuthZEN Authorization API, the reserve, commit and release extension, the shared store, and how concurrent and repeated payments are handled.
-- [Veridact agent identity](docs/veridact-agent-identity.md) (draft, not yet built): how Valet knows which agent it is talking to, using client attestation, SD-JWT VC and Token Status List, plus known-assistant entries for Claude, ChatGPT, Gemini and Copilot.
+- [Decision service](docs/decision-service.md) (built in `valet/decision/`, on SQLite; the PostgreSQL store is designed): Valet as a decision service the bank's servers call over the OpenID AuthZEN Authorization API, the reserve, commit and release extension, the shared store, and how concurrent and repeated payments are handled.
+- [Veridact agent identity](docs/veridact-agent-identity.md) (draft; Lane A known-assistant checks are built, the Lane B Veridact registry is not): how Valet knows which agent it is talking to, using client attestation, SD-JWT VC and Token Status List, plus known-assistant entries for Claude, ChatGPT, Gemini and Copilot.
 - [Control framework mapping](docs/control-framework-mapping.md): Valet against a bank control framework for AI agents (autonomy tiers, assurance states, the minimum evidence set, stopping an agent, board questions) and against South African, EU and UK regulation.
 
 The proof of concept contains:
@@ -122,7 +122,9 @@ How the pieces talk:
 - **Veridact known-assistant entry**: the bank checks a Veridact-signed SD-JWT VC about Claude, and its Token Status
   List, itself (`valet/bank/known_assistants.py`, `VALET_KNOWN_ASSISTANTS`). The consent screen names the verified
   operator ("Claude, operated by Anthropic PBC"); if Veridact suspends Claude, every call stops with
-  `ASSISTANT_SUSPENDED` within seconds, at every bank that checks it. The demo's attester is
+  `ASSISTANT_SUSPENDED` at every bank that checks it, as soon as its cached status answer expires (15 seconds in the
+  demo). Network-wide, Veridact allows up to about 10 minutes (5 to publish, 5 of verifier cache); the bank's own
+  denylist stops it at once. The demo's attester is
   [`veridact/attester`](https://github.com/veridactlabs/veridact/tree/main/attester).
 - **Actor claim**: Keycloak's token carries `act: {"sub": "claude"}` (RFC 8693): Claude acts for the customer in
   `sub`. The server refuses a token whose actor is not its client, and every receipt records the actor.

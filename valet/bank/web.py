@@ -216,7 +216,12 @@ def router(bank) -> APIRouter:
                 "pct": min(100, round(100 * store.spent(g["id"]) / limit)) if limit else 0,
                 "days_left": max(0, int((g["expires"] - time.time()) // 86400)),
                 "last": describe(last) if last else None, "pending": len(pend),
-                "trusted": bank.registry.is_trusted(g["client_id"])}
+                "trusted": bank.registry.is_trusted(g["client_id"]),
+                # Three different claims, shown differently: a verified agent proves its own key and Veridact
+                # credential; a known assistant is a platform Veridact knows about, not a verified instance.
+                "identity": ("untrusted" if not bank.registry.is_trusted(g["client_id"])
+                             else "assistant" if rec and rec.platform
+                             else "agent" if rec and rec.verified else "untrusted")}
 
     @r.get("/")
     def home():

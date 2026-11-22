@@ -1,15 +1,16 @@
 # How Valet uses Veridact for agent identity
 
-*Draft 0.2, 22 November 2026. Status: design, not yet built; `StaticRegistry` in the proof of concept stands in for
-Veridact.*
+*Draft 0.3, 22 November 2026. Status: Lane A is built (known-assistant checks in `valet/bank/known_assistants.py`).
+Lane B is design: the `VeridactRegistry` and pattern C are not built yet, and `StaticRegistry` stands in for them.*
 
 **The Veridact specification is the source of truth for every Veridact format, protocol and check.** This document
 only says how Valet uses it, so the two can't drift. Where a detail here and the Veridact specification disagree,
 the specification wins and this document is wrong.
 
-- Specification: [Veridact specification v0.4](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md)
-- Direction: [v0.5 proposal: SD-JWT VC, OAuth-native identifiers and known assistants](https://github.com/veridactlabs/veridact/blob/main/docs/proposals/0.5-sd-jwt-vc.md)
-  (proposed). This document is written against v0.5.
+- Specification: [Veridact specification v0.5](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md) (draft; also at
+  [veridact.net/docs](https://veridact.net/docs/veridact/spec/)). This document is written against it, and section
+  numbers below are the specification's.
+- Background: [the v0.5 proposal](https://github.com/veridactlabs/veridact/blob/main/docs/proposals/0.5-sd-jwt-vc.md) (accepted).
 
 ## What each product answers
 
@@ -34,7 +35,7 @@ The bank's components never call an issuer. The verifier reads cached public fil
 ## Lane A: mainstream assistants
 
 Claude, ChatGPT, Gemini and Copilot connect as one OAuth client per platform, and will never hold a Veridact
-credential. Instead, Veridact issues a **known-assistant entry** about each platform (Veridact v0.5 proposal, §6).
+credential. Instead, Veridact issues a **known-assistant entry** about each platform ([Veridact §13](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md#13-known-assistants)).
 The bank uses it three ways:
 
 - **Admission.** At client registration and on every token request, the bank's authorisation server maps the
@@ -43,22 +44,25 @@ The bank uses it three ways:
 - **Consent screen.** Valet shows the verified operator name from the entry ("Claude, operated by Anthropic PBC"),
   never the name the client gives itself.
 - **Kill switch.** A withdrawn or suspended entry stops the assistant at every bank on its next check. Valet pauses
-  the affected mandates, and records the status that caused it in a receipt.
+  the affected mandates, and records the status that caused it in a receipt. How soon "next check" comes is
+  bounded by the status list: Veridact publishes a change within 5 minutes and verifiers cache for at most 5
+  ([§14.1](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md#141-token-status-list)), so network-wide it is minutes, not seconds. To stop an assistant
+  at once, the bank uses its own denylist.
 
 An entry never raises the tier, so Lane A stops at Approved payer ([MCP gateway design](mcp-gateway-design.md)).
 
 ## Lane B: purpose-built agents
 
-The agent's `client_id` is its Veridact identifier: a CIMD URL whose `jwks` holds its key (v0.5 §1.1). It proves
+The agent's `client_id` is its Veridact identifier: a CIMD URL whose `jwks` holds its key ([§5.1](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md#51-agents-are-oauth-clients)). It proves
 itself one of two ways:
 
 | Veridact pattern | At the bank | When |
 |---|---|---|
-| **C. Client attestation** (v0.5 §5.3) | `attest_jwt_client_auth_dpop` at PAR and the token endpoint: the Veridact-issued Client Attestation plus the DPoP proof | **Default**, where the bank's authorisation server supports attestation-based client authentication |
-| **A. Token exchange** (v0.5 §5) | The SD-JWT+KB presentation as `subject_token`, with DPoP | Where it doesn't, through the Keycloak bridge or an equivalent |
+| **C. Client attestation** ([§10.3](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md#103-pattern-c-client-attestation)) | `attest_jwt_client_auth` at PAR and the token endpoint: the Veridact-issued Client Attestation, with a DPoP proof as its proof of possession so the same key binds the access token | **Default**, where the bank's authorisation server supports attestation-based client authentication |
+| **A. Token exchange** ([§10.2](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md#102-patterns-a-and-b)) | The SD-JWT+KB presentation as `subject_token`, with DPoP | Where it doesn't, through the Keycloak bridge or an equivalent |
 
 Either way, the bank's authorisation server asks the verifier and issues Valet's DPoP-bound token. Per Veridact
-§5.4, that token carries:
+[§10.4](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md#104-access-tokens), that token carries:
 
 - the customer in `sub`
 - the agent URL in `act.sub`, with `sub_profile` `ai_agent`
@@ -106,7 +110,7 @@ For an incident, the bank uses its denylist. Veridact withdrawal is the network-
 |---|---|
 | `StaticRegistry` | Joined by a `VeridactRegistry` that calls the verifier sidecar |
 | Consent screen | Operator name, jurisdiction and tier from the verified credential or known-assistant entry |
-| Tokens | `act` and the `veridact` claim, per Veridact §5.4 |
+| Tokens | `act` and the `veridact` claim, per Veridact [§10.4](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md#104-access-tokens) |
 | Mandate checks | Veridact delegation limits, including `per_day` per agent |
 | Receipts | Issuer, credential id, tier and status at decision time |
 | Keycloak extension | Client authenticator for attestation-based client authentication (pattern C) |
