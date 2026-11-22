@@ -5,6 +5,6 @@ PyJWT>=2.8
 cryptography>=42
 Jinja2>=3.1
 itsdangerous>=2.1
-python-multipart>=0.0.9
+python-multipart>=0.0.34
 tzdata>=2024.1
 pytest>=8
