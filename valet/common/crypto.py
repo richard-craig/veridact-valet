@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import secrets
 from pathlib import Path
 from typing import Any
@@ -62,9 +63,12 @@ class Key:
         if path.exists():
             return cls(serialization.load_pem_private_key(path.read_bytes(), password=None))
         k = cls.generate()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(k.private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                                 serialization.NoEncryption()))
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        pem = k.private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                      serialization.NoEncryption())
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)   # readable by the service account only
+        with os.fdopen(fd, "wb") as f:
+            f.write(pem)
         return k
 
     @property

@@ -55,8 +55,7 @@ def router(bank: Bank) -> APIRouter:
 
     @r.get("/jwks")
     def jwks():
-        return {"keys": [{**bank.as_key.jwk, "kid": "as-1", "use": "sig", "alg": "ES256"},
-                         {**bank.receipt_key.jwk, "kid": "receipts-1", "use": "sig", "alg": "ES256"}]}
+        return {"keys": [*bank.as_keys.jwks(), *bank.receipt_keys.jwks()]}
 
     # ----------------------------------------------------------------- PAR
     @r.post("/par", status_code=201)

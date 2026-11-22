@@ -28,6 +28,7 @@ from typing import Any
 
 import jwt
 
+from ..common.signers import jws_kid
 from ..common.crypto import digest, verify
 from .config import SAST
 from .context import Bank
@@ -102,7 +103,8 @@ def build(bank: Bank, grant_id: str | None = None, client_id: str | None = None,
     body: dict[str, Any] = {
         "format": FORMAT,
         "generated_at": datetime.now(SAST).isoformat(timespec="seconds"),
-        "bank": {"issuer": bank.cfg.issuer, "receipt_key": bank.receipt_key.jwk},
+        "bank": {"issuer": bank.cfg.issuer, "receipt_key": bank.receipt_key.jwk,
+                 "receipt_keys": bank.receipt_keys.jwks()},
         "scope": scope,
         "reason": reason[:200],
         "grants": grants,
@@ -121,17 +123,29 @@ def verify_pack(pack: dict[str, Any], trusted_jwk: dict[str, Any] | None = None)
     """Check a pack offline. `trusted_jwk` is the bank's published receipt key; without it, the pack's own copy is
     used and the result says so."""
     problems: list[str] = []
-    key = trusted_jwk or pack.get("bank", {}).get("receipt_key")
-    if not key:
+    bank = pack.get("bank", {})
+    if isinstance(trusted_jwk, list):
+        keys = trusted_jwk                                 # the bank's published receipt keys (JWKS entries)
+    elif trusted_jwk:
+        keys = [trusted_jwk]
+    else:
+        keys = bank.get("receipt_keys") or ([bank["receipt_key"]] if bank.get("receipt_key") else [])
+    if not keys:
         return {"ok": False, "problems": ["no receipt key to check against"], "receipts_checked": 0}
     body = {k: v for k, v in pack.items() if k != "pack_signature"}
 
     def signed(token: str, expect: dict[str, Any], what: str) -> None:
-        try:
-            if verify(token, key) != expect:
-                problems.append(f"{what}: the signature covers different content")
-        except jwt.PyJWTError as e:
-            problems.append(f"{what}: bad signature ({e})")
+        kid = jws_kid(token)
+        named = [k for k in keys if k.get("kid") and k.get("kid") == kid] or keys
+        last: Exception | None = None
+        for k in named:
+            try:
+                if verify(token, {f: k[f] for f in ("kty", "crv", "x", "y")}) != expect:
+                    problems.append(f"{what}: the signature covers different content")
+                return
+            except jwt.PyJWTError as e:
+                last = e
+        problems.append(f"{what}: bad signature ({last})")
 
     signed(pack.get("pack_signature", ""), {"pack": digest(body)}, "pack")
     prev: dict[str, Any] | None = None

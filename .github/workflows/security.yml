@@ -1,0 +1,25 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"     # weekly, Monday 05:17 SAST: catch new advisories in unchanged code
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    name: Known vulnerabilities in dependencies (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install pip-audit
+      - run: pip-audit -r requirements.txt -r requirements-cloud.txt --progress-spinner off
+
+# Static analysis: CodeQL runs through GitHub's default setup (Settings → Code security), which scans Python,
+# Actions and Java on every pull request. A CodeQL job here as well would be rejected while default setup is on.

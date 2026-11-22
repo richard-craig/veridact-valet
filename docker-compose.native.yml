@@ -49,7 +49,7 @@ services:
       start_period: 20s
 
   bank:
-    build: .
+    build: {context: ., args: {CLOUD_EXTRAS: "${CLOUD_EXTRAS:-}"}}
     image: veridact-valet/app
     command: uvicorn valet.bank.main:get_app --factory --host 0.0.0.0 --port 8000
     environment:
@@ -80,6 +80,10 @@ services:
         {"issuer": "${VERIDACT_URL:-http://localhost:8100}", "fetch": "http://veridact:8100",
          "entries": {"claude": "claude"}, "cache_seconds": ${VALET_KNOWN_ASSISTANT_CACHE:-5}}
       VERIDACT_ADMIN_URL: ${VERIDACT_URL:-http://localhost:8100}/admin
+      # Signing keys: empty = PEM files in /data/keys (demo). Key Vault: azure-kv:https://<vault>.vault.azure.net/keys/<name>
+      VALET_KEY_AS: ${VALET_KEY_AS:-}
+      VALET_KEY_RECEIPTS: ${VALET_KEY_RECEIPTS:-}
+      VALET_KEY_CONSENT_EVENTS: ${VALET_KEY_CONSENT_EVENTS:-}
     volumes: [valetdata:/data]
     ports: ["8000:8000"]
     depends_on:
