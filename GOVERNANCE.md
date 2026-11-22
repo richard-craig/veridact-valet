@@ -59,6 +59,12 @@ Once there are at least three maintainers from at least two organisations, they 
 takes over the lead maintainer's tie-breaking role, approves changes to this document, and decides on joining
 a neutral foundation. No organisation may hold more than one third of steering-group seats.
 
+## Commercial support
+
+The code is free under Apache 2.0, and nobody needs a contract to run it. Commercial support, integration help and
+assurance are available from **IAME (IAM Experts)**. IAME has no extra say in the project because of it: its
+people take part as contributors and maintainers under the same rules as everyone else.
+
 ## Changing this document
 
 Changes to this document need two thirds of maintainers to agree, with the pull request open for at least 14
