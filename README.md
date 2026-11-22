@@ -121,7 +121,7 @@ How the pieces talk:
   List, itself (`valet/bank/known_assistants.py`, `VALET_KNOWN_ASSISTANTS`). The consent screen names the verified
   operator ("Claude, operated by Anthropic PBC"); if Veridact suspends Claude, every call stops with
   `ASSISTANT_SUSPENDED` within seconds, at every bank that checks it. The demo's attester is
-  [`veridact/attester`](https://github.com/richard-craig/veridact/tree/main/attester).
+  [`veridact/attester`](https://github.com/veridactlabs/veridact/tree/main/attester).
 - **Actor claim**: Keycloak's token carries `act: {"sub": "claude"}` (RFC 8693): Claude acts for the customer in
   `sub`. The server refuses a token whose actor is not its client, and every receipt records the actor.
 - **Read-only profile**: `VALET_MCP_READ_ONLY=1` offers only the four read tools, for a Connectors Directory listing

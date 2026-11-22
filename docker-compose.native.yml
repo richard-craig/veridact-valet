@@ -92,7 +92,7 @@ services:
 
   veridact:
     build:
-      context: ${VERIDACT_REPO:-https://github.com/richard-craig/veridact.git#main}
+      context: ${VERIDACT_REPO:-https://github.com/veridactlabs/veridact.git#main}
       dockerfile: attester/Dockerfile
     image: veridact/attester
     environment:

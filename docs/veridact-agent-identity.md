@@ -7,8 +7,8 @@ Veridact.*
 only says how Valet uses it, so the two can't drift. Where a detail here and the Veridact specification disagree,
 the specification wins and this document is wrong.
 
-- Specification: [Veridact specification v0.4](https://github.com/richard-craig/veridact/blob/main/docs/specification.md)
-- Direction: [v0.5 proposal: SD-JWT VC, OAuth-native identifiers and known assistants](https://github.com/richard-craig/veridact/blob/main/docs/proposals/0.5-sd-jwt-vc.md)
+- Specification: [Veridact specification v0.4](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md)
+- Direction: [v0.5 proposal: SD-JWT VC, OAuth-native identifiers and known assistants](https://github.com/veridactlabs/veridact/blob/main/docs/proposals/0.5-sd-jwt-vc.md)
   (proposed). This document is written against v0.5.
 
 ## What each product answers

@@ -122,7 +122,7 @@ class DecisionService:
                 "access_evaluations_endpoint": b + "/access/v1/evaluations",
                 "access_request_endpoint": b + "/access/v1/access_requests",
                 "valet_reservations_endpoint": b + "/valet/v1/reservations",
-                "valet_profile": "https://github.com/richard-craig/veridact-valet/blob/main/docs/valet-profile.md",
+                "valet_profile": "https://github.com/veridactlabs/veridact-valet/blob/main/docs/valet-profile.md",
                 "valet_reasons": sorted(MCP_CODES)}
 
     # ================================================================ evaluation
