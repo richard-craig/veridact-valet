@@ -361,7 +361,18 @@ Valet profile on its own platform and prove it with the tests.
 
 ## Licence
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE). The project's names are covered separately in [TRADEMARKS.md](TRADEMARKS.md).
+
+## Governance and standards
+
+Valet is run as an open project, not a one-person or one-company product. [GOVERNANCE.md](GOVERNANCE.md) sets out
+how decisions are made and how contributors become maintainers, with the aim of maintainers from at least three
+organisations and no single organisation holding a majority. Current maintainers are in [MAINTAINERS.md](MAINTAINERS.md).
+
+The interoperable parts of the profile (mandate types, approval reasons, error codes and receipts) are being
+standardised in the open as the IETF Internet-Draft
+[draft-craig-oauth-rar-payment-mandates](https://datatracker.ietf.org/doc/draft-craig-oauth-rar-payment-mandates/).
+Discussion happens on the IETF OAuth working group list (oauth@ietf.org), and anyone can join.
 
 ## Status
 
