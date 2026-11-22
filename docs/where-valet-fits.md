@@ -93,7 +93,7 @@ Why open source matters here, in order of importance to a bank:
 - **You own it.** Mandates, receipts and keys stay in your environment, under your POPIA obligations. No per-agent or per-transaction licence.
 - **Your security team can read it.** The rules that decide whether money moves are inspectable and testable, not a black box.
 - **It is portable.** The same profile runs on PingFederate, Keycloak, Entra ID, Okta, Auth0 or Curity.
-- **You are not depending on one small supplier.** Apache 2.0 gives the right to fork; conformance tests let you prove any implementation, including your own; commercial support, integration and certification are available from Veridact separately; and the banking constraints profile is intended for a standards body, so it outlives any one company.
+- **You are not depending on one small supplier.** Apache 2.0 gives the right to fork; conformance tests let you prove any implementation, including your own; commercial support, integration and assurance are available from IAME (IAM Experts) separately; and the banking constraints profile is intended for a standards body, so it outlives any one company.
 
 ## 5. "How is the agent bound to the customer, the token and the mandate?"
 
@@ -170,7 +170,7 @@ The stronger the agent proves itself, the more it may do. The bearer tier does n
 
 ### Agent identity as a URL the vendor hosts
 
-Agent ecosystems are converging on one pattern: an agent identifies itself with an HTTPS URL that serves its metadata and signing keys. The Personal Agent Protocol (Poppy) does this, and Claude does it through Client ID Metadata Documents (CIMD), hosted by Anthropic. Veridact's `did:webvh` identities are the same pattern (Veridact specification v0.4).
+Agent ecosystems are converging on one pattern: an agent identifies itself with an HTTPS URL that serves its metadata and signing keys. The Personal Agent Protocol (Poppy) does this, and Claude does it through Client ID Metadata Documents (CIMD), hosted by Anthropic. Veridact follows the same pattern: its v0.5 proposal makes the agent's CIMD URL its Veridact identifier.
 
 What CIMD proves, and what it doesn't:
 
@@ -181,7 +181,7 @@ Valet's position:
 
 - **Never open Dynamic Client Registration.** It creates anonymous clients the bank can't reason about.
 - **Allowlist agent identities, each with a tier.** Accept CIMD from an allowlist of platform URLs where a platform offers it; use a pre-registered confidential client where the platform allows a secret, because that adds client authentication at the token endpoint.
-- **Use one identity URL for both jobs.** Veridact is designed to accept CIMD-shaped metadata, so the same agent URL serves OAuth client identification and Veridact verification. *(Proposed; see §8.)*
+- **Use one identity URL for both jobs.** In Veridact v0.5 (proposed) the agent's CIMD URL is its Veridact identifier, so the same URL serves OAuth client identification and Veridact verification. *(Proposed; see §8.)*
 
 ## 6. How Valet lines up with agent payment standards
 
@@ -213,7 +213,7 @@ Google's Agent Payments Protocol (AP2) and Mastercard's Verifiable Intent were c
 | Consent Service (open banking intent model) | **Built**; OpenAPI in `docs/` |
 | MCP gateway for Claude, bearer tier | **Built** for the demo; ChatGPT, Copilot and Gemini follow on the same gateway |
 | PingFederate native mode | **Designed**; consent hand-off and token-claim hook to be confirmed |
-| `act` claim, CIMD allowlist, Veridact accepting CIMD metadata | **Proposed** |
+| `act` claim, CIMD allowlist, CIMD URLs as Veridact identifiers and known-assistant entries (Veridact v0.5) | **Proposed** |
 | Mandate id and version, and the bank's policy version, on every receipt | **Built** ([Technical design](technical-design.md) §3.1, §8.2) |
 | Emergency stop that sweeps in-flight work and is recorded; signed evidence packs | **Built** ([Technical design](technical-design.md) §8.3, §9.1) |
 | Editable, versioned mandates; intent and triggering instruction on every receipt | **Proposed** ([Technical design](technical-design.md) §3.1) |

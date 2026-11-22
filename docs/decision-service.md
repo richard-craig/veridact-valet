@@ -60,7 +60,11 @@ nothing Valet-specific to build the request.
 | `context` | Tool arguments reach the decision **only if the mapping projects them**: anything not projected is not evaluated | Payee, amount, currency, idempotency key, the agent's stated reason |
 
 Valet adds facts the token gives the bank: `context.valet_grant` (the mandate id), `context.token_tier`
-(`bearer` or `dpop`) and `context.veridact` (the verifier's result). It also adds `channel`, `api` or `mcp`.
+(`bearer` or `dpop`) and `context.veridact` (the Veridact verifier's result: issuer, credential id, tier and the
+operator's delegation `limits`, or the known-assistant entry). Valet applies the **lower** of the mandate's limits
+and the delegation's, and counts the delegation's `per_day` against the agent across all its customers at this
+bank. How Veridact's own decisions map onto Valet's outcomes is in
+[Veridact agent identity](veridact-agent-identity.md#what-valet-does-with-veridacts-answer). It also adds `channel`, `api` or `mcp`.
 
 **Each Valet tool declares its mapping** in its `inputSchema` as `x-authzen-mapping`, which also appears in
 `tools/list`. The mapping for a payment tool **must project every argument that affects money** (account,

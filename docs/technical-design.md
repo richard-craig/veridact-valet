@@ -33,7 +33,7 @@ A bank can adopt Valet in three ways:
 - **Implement the profile on its own stack** and prove it with the conformance tests.
 - **Mix the two**, typically Valet's enforcement at its API gateway plus its existing identity platform.
 
-Veridact (the company) can separately offer support, integration help, certification and the agent registry. None of that is needed to run the code.
+IAME (IAM Experts) offers commercial support, integration help and assurance. Agent identity comes from the Veridact network, whose verifier is open source. None of that is needed to run the code.
 
 ### 1.2 What Valet provides, and what the bank controls
 
@@ -366,7 +366,7 @@ Debtor ownership, account status and payee eligibility are confirmed by the bank
 | Revoke (disconnect) | Customer, bank | Grant revoked; refresh tokens deleted; approvals and unaccepted payments cancelled as for pause | No; the agent must connect again |
 | Expiry | Automatic | Grant becomes `expired` at `expires`; renewal needs fresh customer consent | No |
 | Denylisted | Bank | Every call for that client, operator or key refused with `agent_denied` on the next request, on every node sharing the database; every approval not yet used and every payment the bank has not accepted cancelled, as for pause; checked again before any payment is sent; recorded in the receipt chain (§9.1) | When the bank removes the entry; cancelled approvals and payments stay cancelled |
-| Agent untrusted | Bank, or Veridact revoking the operator | All grants for that agent refused with `agent_untrusted` within the registry cache (60 s) (§9.1) | When trust is restored |
+| Agent untrusted | Bank, or Veridact revoking the operator | All grants for that agent refused with `agent_untrusted` within the registry cache (60 s), or about 11 minutes for a Veridact withdrawal (§9.1) | When trust is restored |
 
 The activity page tells the customer what stopping did to payments, including when one was already with the bank and may still complete; the pause or revoke receipt records the counts.
 
@@ -454,7 +454,7 @@ class AgentRegistry(Protocol):
 | Implementation | Source of truth | Use |
 | --- | --- | --- |
 | `StaticRegistry` (PoC) | A JSON file signed by the bank | Demo and tests |
-| `VeridactRegistry` (target) | The agent’s Veridact presentation at `/par`, verified locally; operator name and tier from the credential; trust from status lists and revocation push | Production |
+| `VeridactRegistry` (target) | The Veridact verifier sidecar inside the bank: purpose-built agents present a Veridact Client Attestation at `/par` and the token endpoint (`attest_jwt_client_auth_dpop`), or a presentation through token exchange; mainstream assistants are matched to Veridact known-assistant entries. Operator name and tier from the credential; trust from Token Status Lists ([Veridact agent identity](veridact-agent-identity.md)) | Production |
 
 The consent screen shows the operator name only from the registry, never from the agent’s request, so a copycat cannot name itself after a real agent.
 
@@ -479,7 +479,7 @@ The consent screen shows the operator name only from the registry, never from th
 | Path | What it stops | How fast | Where it is checked |
 | --- | --- | --- | --- |
 | **Denylist** (`POST /ops/denylist`, kinds `client_id`, `operator`, `jkt`) | One agent, every agent of one operator, or one key | The next request, on every node that shares the bank's database. No cache | Every API and MCP call, and again just before a payment is sent |
-| **Registry trust** (Veridact or the bank's registry) | Agents the registry no longer trusts | Within the registry cache, 60 seconds (`registry_cache_s`) | Every API and MCP call, and at `/par` |
+| **Registry trust** (Veridact or the bank's registry) | Agents the registry no longer trusts | The bank's own registry: within the registry cache, 60 seconds (`registry_cache_s`). Veridact: up to 5 minutes to publish plus up to 5 minutes in the verifier's cache, plus the 60 seconds: about 11 minutes worst case | Every API and MCP call, and at `/par` |
 
 The denylist is the emergency brake for an incident; the registry is the standing source of trust. Removing a denylist entry (`DELETE /ops/denylist/{kind}/{value}`) takes effect on the next request too.
 
@@ -497,11 +497,11 @@ The check just before a payment is sent stays, for the race where another node w
 
 ### 9.2 Vendor-hosted agent identity (CIMD), proposed
 
-Agent ecosystems identify an agent by an HTTPS URL serving its metadata and signing keys: the Personal Agent Protocol does this, Claude does it through Client ID Metadata Documents (CIMD) hosted by Anthropic, and Veridact's `did:webvh` identities follow the same pattern (Veridact specification v0.4).
+Agent ecosystems identify an agent by an HTTPS URL serving its metadata and signing keys: the Personal Agent Protocol does this, Claude does it through Client ID Metadata Documents (CIMD) hosted by Anthropic, and Veridact follows the same pattern: v0.4 uses `did:webvh`, and the v0.5 proposal makes the agent's CIMD URL its Veridact identifier.
 
 - **What CIMD proves:** the client ID is the platform's URL, and the authorisation code can only go to the platform's registered callback. **What it doesn't:** Claude's CIMD client authenticates as a public client (PKCE only), and it identifies the platform, not an individual agent. Claude uses CIMD only when the server metadata advertises `client_id_metadata_document_supported: true` and `none` in `token_endpoint_auth_methods_supported`.
 - **Proposed design:** a `CimdRegistry` behind the same `AgentRegistry` interface, accepting metadata URLs only from a bank-maintained allowlist, each with an assurance tier. Dynamic Client Registration stays off. Where a platform allows a client secret or key, the pre-registered confidential client remains preferred, because it adds client authentication at the token endpoint.
-- **Veridact alignment:** Veridact accepts CIMD-shaped metadata, so one agent URL serves both OAuth client identification and Veridact verification.
+- **Veridact alignment:** in Veridact v0.5 (proposed) the agent's CIMD URL is its Veridact identifier, so one URL serves both OAuth client identification and Veridact verification. For assistant platforms, Veridact known-assistant entries supply the allowlist.
 - **Open point:** confirm CIMD support in the reference PingFederate version.
 
 ## 10. API reference

@@ -326,7 +326,7 @@ How a session stays alive: the assistant receives a refresh token and gets new 5
 | G6 | No egress IP allowlist | J2 | Allowlist the platform's published ranges (Anthropic: `160.79.104.0/21`) as defence in depth | Bank |
 | G7 | Prompt injection can still mislead what the agent tells the customer | All | Bank-generated approval screens; full triggering instruction in receipts | Valet + bank |
 | G8 | Approval fatigue | All | Fraud-pattern monitoring on approval requests | Bank |
-| G9 | Agent identity is the platform, not the individual agent, on J2 | J2 | Attribute activity to the platform client and make no per-agent claims until a platform assertion or attestation can be verified; CIMD allowlist; Veridact accepting CIMD-shaped metadata | Valet |
+| G9 | Agent identity is the platform, not the individual agent, on J2 | J2 | Attribute activity to the platform client and make no per-agent claims until a platform assertion or attestation can be verified; CIMD allowlist; Veridact known-assistant entries for platforms and CIMD URLs as Veridact identifiers (Veridact v0.5, proposed) | Valet + Veridact |
 | G10 | POPIA cross-border transfer; SARB Directive 2 of 2024 | All | Counsel's view | Valet + bank |
 | G11 | Browser agents riding web sessions | Outside Valet | Veridact detection on web channels | Veridact + bank |
 | G12 | Claude Code arrives as a public CIMD client | J2 | Refuse, or hold to view only | Bank |
