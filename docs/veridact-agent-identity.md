@@ -7,10 +7,9 @@ This document covers both lanes in the [MCP gateway design](mcp-gateway-design.m
 §4.3 is how purpose-built agents (Lane B) prove themselves, and §4.5 is how Veridact vouches for mainstream
 assistants (Lane A) that will never present an attestation.
 
-> **Verification note.** Header names, `typ` values and metadata parameter names below are taken from the
-> drafts as of mid-2026 and marked ⚠ where they must be re-checked against the current revisions
-> (attestation-based client auth -12, SD-JWT VC -27, Client ID Metadata Document -03, Token Status List -21)
-> before this is published.
+> **Checked against:** draft-ietf-oauth-attestation-based-client-auth-12, draft-ietf-oauth-sd-jwt-vc-27,
+> draft-ietf-oauth-client-id-metadata-document-03 and draft-ietf-oauth-status-list-21, on 22 November 2026.
+> These are Internet-Drafts and can still change; re-check names when each becomes an RFC.
 
 ## 1. What Veridact answers
 
@@ -63,7 +62,7 @@ Valet answers the other question, *what did the customer allow?*, and does not c
 The verifier syncs the status lists on their `ttl` (5 minutes in the pilot), so a withdrawal reaches every bank
 within one cache period. If the cache is older than its limit and can't be refreshed, the verifier fails closed
 for payments and can still allow view-only access, by bank policy. The verifier is exposed to the bank's
-components as a small local API; its result is passed to the Valet decision service in the AuthZEN `subject`
+components as a small local API; its result is passed to the Valet decision service as `context.veridact` in the AuthZEN request (the subject is always the customer)
 (see [Decision service](decision-service.md)).
 
 Any organisation can run its own Veridact attester. Relying organisations choose which attesters they trust,
@@ -76,16 +75,22 @@ exactly as browsers choose which CAs they trust. That keeps Veridact from becomi
 The agent's `client_id` is an HTTPS URL, e.g. `https://agents.kaya.example/clients/money-assistant`, which
 serves its OAuth client metadata (name, logo, redirect URIs, `jwks_uri`, contacts).
 
-CIMD tells the bank *what the software says about itself*. It does **not** establish trust in the operator;
-that is what the operator credential and attestation add.
+CIMD tells the bank *what the software says about itself*. It does **not** establish trust in the operator:
+the draft leaves trust in the domain to the authorization server's own policies, and warns that self-asserted
+`client_name` and `logo_uri` can be used for impersonation (§10.8, §10.10). That gap is what the operator
+credential and attestation fill. The bank advertises support with `client_id_metadata_document_supported`. The
+document's `client_id` must equal its URL, compared as a plain string with no normalisation; a client using
+`private_key_jwt` must publish `jwks` or `jwks_uri`.
 
 ### 4.2 Operator credential (SD-JWT VC)
 
 Issued once after operator verification, renewed yearly.
 
-- `typ`: `dc+sd-jwt` ⚠
-- `vct`: `https://veridact.net/vct/agent-operator/v1`
-- `iss`: Veridact issuer URL; keys published at the issuer's JWT VC Issuer Metadata endpoint ⚠
+- `typ`: `dc+sd-jwt` (media type `application/dc+sd-jwt`)
+- `vct`: `https://veridact.net/vct/agent-operator/v1` (the only claim the format requires)
+- `iss`: Veridact's HTTPS issuer URL; keys published at `/.well-known/jwt-vc-issuer` (its `issuer` must equal
+  `iss`; exactly one of `jwks_uri` or `jwks`). An `x5c` certificate chain is the alternative for banks that
+  prefer X.509 trust anchors.
 - `sub`: the operator's Veridact identifier
 - `cnf`: the operator's key
 - `status`: entry in Veridact's status list (§4.4)
@@ -101,23 +106,33 @@ Issued once after operator verification, renewed yearly.
 Short-lived (minutes to hours), issued by Veridact to an agent instance after the operator authenticates with
 its operator credential.
 
-- JWT, `typ` `oauth-client-attestation+jwt` ⚠
-- `iss`: Veridact attester; `sub`: the agent's `client_id` (the CIMD URL)
-- `exp`: short
-- `cnf.jwk`: the **instance's** public key
+- JWT, `typ` `oauth-client-attestation+jwt`
+- Required by the draft: `sub` (the agent's `client_id`, i.e. the CIMD URL), `exp` (short), `iat`, and
+  `cnf.jwk` (the **instance's** public key)
+- `iss`: the Veridact attester (optional in the draft; Veridact always sets it so banks can pick the trust anchor)
 - Veridact extension claims:
   - `veridact_operator`: the operator's identifier, plus a digest of the operator credential
   - `status`: a status-list entry for this instance, so one compromised instance can be withdrawn without
     withdrawing the operator
   - `agent_class`: e.g. `ai_agent`, matching the actor profile's `sub_profile`
 
-The agent presents it with a proof-of-possession JWT signed by the instance key, in the
-`OAuth-Client-Attestation` and `OAuth-Client-Attestation-PoP` headers ⚠, at PAR and at the token endpoint. Use
-the authorization server's challenge/nonce where offered ⚠.
+The agent sends it in the `OAuth-Client-Attestation` header, at PAR and at the token endpoint. Proof of
+possession comes one of two ways, which the bank advertises in `token_endpoint_auth_methods_supported`:
+
+| Method | Proof | Use |
+|---|---|---|
+| `attest_jwt_client_auth` | An `OAuth-Client-Attestation-PoP` JWT (`typ` `oauth-client-attestation-pop+jwt`; claims `aud`, `jti`, `iat`, optional `challenge`) | Agents that don't use DPoP |
+| `attest_jwt_client_auth_dpop` | The DPoP proof doubles as the PoP ("combined mode") | **Lane B default:** one key, one proof, and the tokens are DPoP-bound |
+
+The bank's authorization server can publish a `challenge_endpoint` (POST, returns `attestation_challenge`) for
+freshness, and refuses with `use_attestation_challenge`, `use_fresh_attestation` or `invalid_client_attestation`.
+The same headers work at a resource server, which answers with a `401` and the error in `WWW-Authenticate`.
 
 ### 4.4 Withdrawal (Token Status List)
 
-Veridact publishes status list tokens (`typ` `statuslist+jwt` ⚠), using two bits per entry:
+Veridact publishes status list tokens (`typ` `statuslist+jwt`, media type `application/statuslist+jwt`), using
+two bits per entry (the format allows 1, 2, 4 or 8). Each credential points to its entry with
+`"status": {"status_list": {"idx": <n>, "uri": "<list URL>"}}`, and each list carries a `ttl` in seconds:
 
 | Value | Meaning | Effect at the bank |
 |---|---|---|

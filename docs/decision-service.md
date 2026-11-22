@@ -1,6 +1,6 @@
 # Valet decision service: AuthZEN interface, reservations and the shared store
 
-Draft v0.1 · 22 November 2026 · Design, not yet built. Today the proof of concept runs these checks in-process
+Draft v0.2 · 22 November 2026 · Design, not yet built. v0.2 aligns requests with the AuthZEN COAZ-MCP binding and approvals with the AuthZEN Access Request and Approval Profile. Today the proof of concept runs these checks in-process
 (`valet/bank/payments.py`, `valet/bank/mcp.py`); this document is how they become a service the bank calls.
 
 ## Summary
@@ -45,43 +45,98 @@ the enforcement point refuses the action. It never assumes "allow".
 Endpoint: `POST /access/v1/evaluation`, discovered from `/.well-known/authzen-configuration`
 (`access_evaluation_endpoint`). A deny is a `200` with `"decision": false`, not an HTTP error.
 
-### Request
+### Request: aligned with the COAZ-MCP binding
 
-| AuthZEN member | Valet meaning |
-|---|---|
-| `subject` | The agent: `{"type":"agent","id":"<client_id>","properties":{"grant":"<grant id>","customer":"<pairwise id>","actor":{…Veridact result…},"token":{"jkt":"…","tier":"bearer"|"dpop"}}}` |
-| `action` | The operation: `{"name":"pay_existing_beneficiary"}`, `view_balance`, `list_payees`, … |
-| `resource` | The account: `{"type":"account","id":"<account id>"}` |
-| `context` | The facts of this call: `payment` (payee, amount, currency), `idempotency_key`, `channel` (`mcp` / `api`), the agent's stated reason (labelled agent-supplied) |
+The AuthZEN working group's **COAZ-MCP Binding 1.0** (working group draft) defines how an MCP `tools/call`
+becomes an AuthZEN request. Valet follows it, so a bank's MCP server, or any AuthZEN-aware MCP gateway, needs
+nothing Valet-specific to build the request.
 
-Example: a payment
+| AuthZEN member | COAZ-MCP rule | Valet use |
+|---|---|---|
+| `subject` | The **human** the agent acts for, from the validated token: `{"type":"identity","id":"$token.sub"}`. Only the verified `id` is trusted. | The customer's pairwise `sub` at this bank |
+| `context.agent` | The agent is **not** the subject; it goes in context: `"$token.client_id"` | The client id (a CIMD URL for Claude or ChatGPT) |
+| `action` | Default `tools/call`; a declared mapping can name the tool | The tool name, e.g. `pay_existing_payee` |
+| `resource` | Default the tool; a declared mapping can project an argument | The account: `{"type":"account","id":"$params.arguments.account"}` |
+| `context` | Tool arguments reach the decision **only if the mapping projects them**: anything not projected is not evaluated | Payee, amount, currency, idempotency key, the agent's stated reason |
+
+Valet adds facts the token gives the bank: `context.valet_grant` (the mandate id), `context.token_tier`
+(`bearer` or `dpop`) and `context.veridact` (the verifier's result). It also adds `channel`, `api` or `mcp`.
+
+**Each Valet tool declares its mapping** in its `inputSchema` as `x-authzen-mapping`, which also appears in
+`tools/list`. The mapping for a payment tool **must project every argument that affects money** (account,
+payee, amount, currency, idempotency key). An unprojected argument is unchecked, and the PEP conformance tests
+fail any tool whose schema has an argument its mapping leaves out.
 
 ```json
-{
-  "subject":  {"type": "agent", "id": "https://claude.ai/oauth/mcp-client-metadata",
-               "properties": {"grant": "g_7Hq2", "customer": "ps_91ac", "token": {"tier": "bearer"}}},
-  "action":   {"name": "pay_existing_beneficiary"},
-  "resource": {"type": "account", "id": "acc_cheque_1"},
-  "context":  {"payment": {"payee": "ben_city_power", "amount": "450.00", "currency": "ZAR"},
-               "idempotency_key": "c1f0e6a2-…", "channel": "mcp",
-               "agent_reason": "Monthly electricity bill"}
+"x-authzen-mapping": {
+  "subject":  {"type": "identity", "id": "$token.sub"},
+  "action":   {"name": "pay_existing_payee"},
+  "resource": {"type": "account", "id": "$params.arguments.account"},
+  "context":  {"agent": "$token.client_id", "valet_grant": "$token.valet_grant",
+               "payment": {"payee": "$params.arguments.payee", "amount": "$params.arguments.amount",
+                           "currency": "$params.arguments.currency"},
+               "idempotency_key": "$params.arguments.idempotency_key",
+               "agent_reason": "$params.arguments.reason"}
 }
 ```
 
+The resulting request for a payment:
+
+```json
+{
+  "subject":  {"type": "identity", "id": "ps_91ac"},
+  "action":   {"name": "pay_existing_payee"},
+  "resource": {"type": "account", "id": "acc_cheque_1"},
+  "context":  {"agent": "https://claude.ai/oauth/mcp-client-metadata", "valet_grant": "g_7Hq2",
+               "token_tier": "bearer", "channel": "mcp",
+               "payment": {"payee": "ben_city_power", "amount": "450.00", "currency": "ZAR"},
+               "idempotency_key": "c1f0e6a2-…", "agent_reason": "Monthly electricity bill"}
+}
+```
+
+On the direct API (Lane B), the bank's API builds the same request from the HTTP call, with the same field names.
+
 ### Response
 
-Everything Valet-specific sits under `context.valet`. AuthZEN lets a PEP refuse a `true` decision whose context
-it does not understand. Valet relies on that: an enforcement point that cannot read `context.valet` must not move
-money.
-
-| Outcome | `decision` | `context.valet` |
+| Outcome | `decision` | `context` |
 |---|---|---|
-| Allowed, nothing to hold (for example `view_balance`) | `true` | `{"outcome":"allowed","receipt":"…"}` |
-| Payment within the mandate | `true` | `{"outcome":"reserved","reservation":"r_…","expires_at":"…","receipt":"…"}` |
-| Needs the customer | `false` | `{"outcome":"approval_required","reason":"over_per_payment","reservation":"r_…","approval":{…challenge…}}` |
-| Refused | `false` | `{"outcome":"declined","reason":"payee_not_on_mandate","receipt":"…"}` |
+| Allowed, nothing to hold (for example `view_balance`) | `true` | `{"valet":{"outcome":"allowed","receipt":"…"}}` |
+| Payment within the mandate | `true` | `{"valet":{"outcome":"reserved","reservation":"r_…","expires_at":"…","receipt":"…"}}` |
+| Needs the customer | `false` | `{"reason":"over_per_payment","evaluation_id":"…","access_request":{…},"valet":{"reservation":"r_…"}}` (see approvals below) |
+| Refused | `false` | `{"reason":"payee_not_on_mandate","evaluation_id":"…","valet":{"outcome":"declined","receipt":"…"}}` |
 
-Reasons are the seven from the Internet-Draft, applied in its fixed order.
+- `context.reason` carries the draft's seven machine-readable reasons, in its fixed order. This is the same key
+  the approval profile uses.
+- Everything else Valet-specific sits under `context.valet`. AuthZEN lets an enforcement point refuse a `true`
+  decision whose context it does not understand, and Valet relies on that: an enforcement point that cannot read
+  `context.valet` must not move money.
+- **In MCP**, per the binding, a deny becomes JSON-RPC error `-32001` (or a tool result with `isError: true` that
+  carries the reason to the assistant), a mapping error is `-32602`, and a failure to reach Valet is `-32603`, so
+  nothing is executed. The binding defines no standard key for the reason, so the reference MCP server copies
+  `context.reason` into the error data.
+
+### Approvals: aligned with the AuthZEN Access Request and Approval Profile (AARP)
+
+When a payment needs the customer, Valet returns a **requestable denial** in the AARP's form: `decision: false`
+with `context.access_request` (`expires_at`, `endpoint`, `binding_token`), `context.reason` and
+`context.evaluation_id`. The amount stays held under the reservation while the customer decides.
+
+1. The enforcement point `POST`s to the access-request endpoint (advertised as `access_request_endpoint`), with
+   the `binding_token`. Valet answers `202` with a `task` (`id`, `status: pending`, `status_endpoint`,
+   `expires_at`).
+2. Valet asks the customer in the bank's own app: through the bank's CIBA or push channel, or the OAuth
+   Transaction Authorization Challenge for Lane B. The task moves once to `approved`, `denied`, `expired` or
+   `cancelled`.
+3. The enforcement point polls `status_endpoint` (backoff with jitter, honouring `Retry-After`), or receives a
+   callback.
+4. On `approved`, it **re-evaluates** with `context.approval` (`id`, `approved_until`). Valet answers
+   `decision: true` with the same reservation, now `reserved`, and the payment flow continues.
+
+Valet is stricter than the base profile in one place. The AARP governs reuse by scope and expiry, and its
+default scope is an exact match of subject, resource, action and the relevant context. **Valet also makes every
+payment approval single-use:** it is bound to one reservation and consumed on the re-evaluation that turns it
+into `reserved`. A second re-evaluation with the same approval gets `decision: false` with `reason`
+`approval_expired` and `next_action: none`.
 
 ### Tool lists: batch evaluation
 
@@ -113,8 +168,8 @@ Rules:
 - A reservation never sent expires after its `expires_at` (default 10 minutes), and the hold is released. That is
   safe because no money could have moved.
 - Every call is idempotent: `commit` twice returns the same result; `commit` after `release` is a `409`.
-- An approval (`approval_required`) is bound to its reservation. When the customer approves, the same reservation
-  becomes `reserved` and the flow continues. An approval can never be reused for another payment.
+- An approval is bound to its reservation (see Approvals above). When the customer approves, the same reservation
+  becomes `reserved` and the flow continues. An approval can never be reused, for this payment or another.
 
 ```
 evaluation ─► reserved ─► sent ─► committed
@@ -256,24 +311,31 @@ Chain heads are still published periodically, so truncation can be detected.
 A checklist for the bank's developers. The reference MCP server (`valet/bank/mcp.py`, an example) shows each step.
 
 1. Validate the access token, and pass the grant id and token facts to Valet.
-2. Call `evaluation` before **every** action. Fail closed on timeout or error.
+2. Call `evaluation` before **every** action. Fail closed on timeout or error. In MCP, declare an
+   `x-authzen-mapping` on every tool that projects every money-relevant argument, and return `-32001` on a deny
+   and `-32603` when Valet can't be reached.
 3. Refuse a `true` decision whose `context.valet` it does not understand.
-4. For money: call `sent` before handing the payment to the payment system, use the reservation id as that
+4. On a requestable denial, submit the access request, wait for the task to finish, and re-evaluate with
+   `context.approval`. Never treat a pending or unknown task as approved.
+5. For money: call `sent` before handing the payment to the payment system, use the reservation id as that
    system's idempotency key, then report `commit`, `release` or `unknown`.
-5. Never retry a payment under a new idempotency key.
-6. Pass the agent's stated reason through, labelled as agent-supplied.
-7. Run the PEP conformance tests in CI.
+6. Never retry a payment under a new idempotency key.
+7. Pass the agent's stated reason through, labelled as agent-supplied.
+8. Run the PEP conformance tests in CI.
 
 ## Open questions
 
-- Align `subject` and `action` names with the AuthZEN MCP tool-authorization profile, and approvals with the
-  AuthZEN Access Request and Approval Profile, once read in detail.
+- COAZ-MCP and AARP are working group drafts; track changes to their field names until they are final.
+- Whether to use the AuthZEN Obligations profile (also a working group draft) for "hold this amount", instead of
+  carrying the reservation in `context.valet`.
 - Decision latency target per bank (300 ms p99 is a starting point).
 - Whether the reservation extension should be proposed to the AuthZEN working group as a profile.
 
 ## References
 
 - [OpenID AuthZEN Authorization API 1.0](https://openid.net/specs/authorization-api-1_0-final.html) (Final, January 2026)
-- [AuthZEN working group specifications](https://openid.net/wg/authzen/specifications/), including the MCP and approval profiles
+- [AuthZEN working group specifications](https://openid.net/wg/authzen/specifications/)
+- [COAZ-MCP Binding 1.0](https://openid.github.io/authzen/authzen-coaz-mcp-binding-1_0) (working group draft)
+- [AuthZEN Access Request and Approval Profile 1.0](https://openid.github.io/authzen/authzen-access-request-approval-profile-1_0.html) (working group draft)
 - [Technical design](technical-design.md), section 5.1 (payment intents)
 - [MCP gateway design](mcp-gateway-design.md)
