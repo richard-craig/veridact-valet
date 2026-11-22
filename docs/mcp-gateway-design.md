@@ -1,6 +1,6 @@
 # Veridact Valet: MCP Gateway & AI Assistant Connectors – Design
 
-Draft v0.3 · 11 November 2026 · Pilot built: `valet/bank/mcp.py` implements the pilot tool surface against Keycloak (see the README). PingFederate, ChatGPT, Copilot and Gemini remain design.
+Draft v0.4 · 22 November 2026 · Pilot built: `valet/bank/mcp.py` implements the pilot tool surface against Keycloak (see the README). PingFederate, ChatGPT, Copilot and Gemini remain design. v0.4 adds the two-lane model and Veridact known-assistant entries.
 
 ## Summary
 
@@ -15,6 +15,51 @@ Key decisions:
 - **Small pilot surface.** Four read tools and one capped payment tool to existing payees. No beneficiary management in v1.
 
 The gateway is how agents connect. The product is still mandates, enforcement and evidence.
+
+## Two lanes into the bank
+
+Agents reach a bank's accounts in one of two lanes. The more a client can prove, the more it can do without asking.
+
+| | Lane A: mainstream assistants | Lane B: purpose-built agents |
+| --- | --- | --- |
+| Examples | Claude, ChatGPT, Gemini, Copilot | A fintech money assistant (the fictional Kaya), an insurer's claims bot |
+| Route | This MCP gateway | Valet's direct API ([Technical design](technical-design.md)) |
+| Who the OAuth client is | The platform: one client for every user of that assistant | The operator's agent, per instance |
+| How it identifies itself | Pre-registered confidential client per platform per bank; or an allowlisted Client ID Metadata Document | Client ID Metadata Document plus a Veridact client attestation bound to the instance's key ([Veridact agent identity](veridact-agent-identity.md)) |
+| Token | Bearer, short-lived, audience-bound | DPoP-bound, via PAR and RAR |
+| Veridact's role | Vouches *for* the platform with a known-assistant entry; the platform does nothing | The agent presents its own attestation |
+| Withdrawal | Per platform: one status bit cuts off that assistant at every bank | Per instance or per operator |
+| Highest level | View only, or Approved payer | Bill payer (standing limits) |
+
+### Lane A, step by step
+
+1. **Connect.** The customer adds the bank as a connector. The assistant gets a `401`, reads the gateway's protected resource metadata and the authorization server metadata, and identifies itself with the client the bank registered for that platform (see [Connector build: Claude](#connector-build-claude) and the sections after it).
+2. **Admit.** The gateway checks the client against Veridact's **known-assistant entries** (below). The platform never presents anything to Veridact; Veridact vouches for it.
+3. **Consent.** The customer signs in with the bank's MFA and builds the mandate on Valet's consent screen. The assistant never sends `authorization_details`; the bank's screen creates them.
+4. **Act.** The assistant calls gateway tools such as `bank.pay_existing_payee`. The gateway is the confidential, sender-constrained client to the bank's APIs, and checks the mandate on every call.
+5. **Stop.** The customer disconnects in the bank app, or Veridact sets the assistant's status to withdrawn or suspended. Either way the next call fails.
+
+### Veridact known-assistant entries
+
+Anthropic, OpenAI, Google and Microsoft will not present Veridact attestations, so Veridact signs a statement *about* each platform. It is the allowlist the gateway already needs, made shareable and withdrawable across banks.
+
+An entry is an SD-JWT VC issued by Veridact with `vct` `https://veridact.net/vct/known-assistant/v1`, containing:
+
+- `operator`: the verified legal entity (for example Anthropic PBC), its jurisdiction and verification date
+- `client_metadata_urls`: the platform's Client ID Metadata Document URLs (for example Claude's, and Claude Code's at `https://claude.ai/oauth/claude-code-client-metadata`)
+- `redirect_hosts`: the hosts its OAuth callbacks use (for example `claude.ai`, `chatgpt.com`)
+- `token_endpoint_auth`: how it can authenticate (`none` for Claude's metadata-document client; `private_key_jwt` with a published JWKS for ChatGPT's)
+- `published_egress`: a link to the platform's published egress ranges, where it has them
+- `max_level`: Veridact's recommended ceiling, which the bank can lower but not raise through Veridact
+- `status`: a Token Status List entry (valid, withdrawn or suspended)
+
+The gateway uses the entry in three ways:
+
+- **Admission.** At registration and on each token request, the client's metadata URL or pre-registered platform must map to a valid entry.
+- **Consent screen.** The verified operator name ("Claude, operated by Anthropic PBC") replaces the self-asserted client name.
+- **Kill switch.** If an assistant platform is compromised, one status change stops that assistant at every Valet bank on its next call, without each bank acting alone. The customer's mandates are paused, not deleted, and the receipts record the status that caused the refusal.
+
+An entry does **not** raise an assistant's assurance tier: the platform is still one client for many users, holding bearer tokens. That is why Lane A stops at Approved payer.
 
 ## Problem and context
 
@@ -179,7 +224,9 @@ The gateway accepts DPoP now and requires it from clients that support it. The m
 | DPoP-bound | Clients once SEP-1932 ships; bank's own agents | Bill payer, within lower caps the bank sets |
 | DPoP-bound and Veridact-verified | Agents with a verified Veridact identity | Bill payer, with the bank's full caps |
 
-This turns the DPoP gap into a sellable rule: the stronger the agent proves itself, the more it can do. For Claude and ChatGPT, though, the OAuth client is the platform, not the individual agent, so Veridact cannot raise their tier yet: retail customers on those platforms stay on the bearer tier until the platforms send DPoP and carry an agent-level identity.
+This turns the DPoP gap into a sellable rule: the stronger the agent proves itself, the more it can do. For Claude and ChatGPT, though, the OAuth client is the platform, not the individual agent, so Veridact cannot raise their tier yet: retail customers on those platforms stay on the bearer tier until the platforms send DPoP and carry an agent-level identity. What Veridact does give Lane A today is a known-assistant entry: verified operator names on the consent screen, and a shared kill switch (see [Two lanes into the bank](#two-lanes-into-the-bank)).
+
+**Watch:** ChatGPT's Client ID Metadata Document can declare `private_key_jwt`, signed with a key OpenAI manages and published at a JWKS URL ([OpenAI](https://developers.openai.com/plugins/build/auth)). That authenticates the platform at the token endpoint without a shared secret. It still does not bind tokens to a key, so it does not change the tier, but it is a better client credential than a secret and worth accepting where the bank's identity platform supports it.
 
 ## Tool surface for the pilot
 
@@ -270,7 +317,7 @@ Copilot reaches MCP through agents an organisation builds, not through the consu
 Gemini has three surfaces, all supporting remote MCP over OAuth.
 
 - **Gemini Enterprise.** A custom MCP server connector, Streamable HTTP only, with an OAuth client ID and secret and Google's redirect URI. It is pre-GA and off by default ([Google support](https://support.google.com/g/answer/17106276)). Same fit as Copilot: business banking.
-- **Consumer Gemini app.** Reportedly accepts a custom MCP server URL in Connected Apps on personal accounts, OAuth required ([Tallyfy](https://tallyfy.com/how-to-list-mcp-server-google-gemini/), third-party, to verify). If confirmed, this is a retail channel alongside Claude and ChatGPT.
+- **Consumer Gemini app.** Reportedly accepts a custom MCP server URL in Connected Apps on personal accounts, OAuth required ([Tallyfy](https://tallyfy.com/how-to-list-mcp-server-google-gemini/), third-party, to verify). Google's own [Connected Apps OAuth guide](https://developers.google.com/connected-apps/mcp/oauth) describes listing through the Play Console with OAuth 2.1: either Dynamic Client Registration, or a client ID and secret entered in the console. It does not mention Client ID Metadata Documents. Valet would use the client ID and secret route, keeping DCR off. If confirmed, this is a retail channel alongside Claude and ChatGPT.
 - **Gemini CLI.** Supports MCP OAuth. Useful for developer testing, not a customer channel.
 
 ### Recommendation
@@ -340,7 +387,8 @@ Open questions:
 - [ ] Confirm the state of South African open banking and whether any bank-API standard should be followed.
 - [ ] Does the reference PingFederate version support CIMD, RFC 8693 token exchange and CIBA as needed?
 - [ ] Confirm current egress IP ranges and callback URLs for Claude, ChatGPT, Copilot and Gemini.
-- [ ] Confirm the consumer Gemini app's custom MCP connector support from Google's documentation.
+- [ ] Confirm the consumer Gemini app's custom MCP connector support from Google's documentation (partly answered: see the Gemini section).
+- [ ] Who operates the Veridact attester that signs known-assistant entries in the pilot, and how a platform can see and dispute its entry.
 - [ ] POPIA review of transaction data returned to third-party assistants.
 
 ## Sources
@@ -352,6 +400,8 @@ Open questions:
 - [Build a plugin for a declarative agent from an MCP server](https://learn.microsoft.com/microsoft-365/copilot/extensibility/build-mcp-plugins) (Microsoft 365 Copilot)
 - [Set up your custom MCP server connection](https://support.google.com/g/answer/17106276) (Gemini Enterprise)
 - [How to get your MCP server into Google Gemini](https://tallyfy.com/how-to-list-mcp-server-google-gemini/) (Tallyfy, third-party)
+- [OAuth 2.1 implementation guide for Connected Apps](https://developers.google.com/connected-apps/mcp/oauth) (Google)
+- [Plugins authentication](https://developers.openai.com/plugins/build/auth) (OpenAI)
 - [SEP-1932 DPoP conformance issue](https://github.com/modelcontextprotocol/conformance/issues/368) (MCP)
 - [DPoP not used for a pre-registered client](https://github.com/anthropics/claude-code/issues/96290) (claude-code issue)
 

@@ -15,6 +15,7 @@ This repository holds the design and a working proof of concept. The design is i
 - [The Valet profile](docs/valet-profile.md): the shared permission standard in one place. Access levels, approval rules, check order, error codes and receipt format, each marked built or specified.
 - [Technical design](docs/technical-design.md): the profile, data model, flows, check order, receipts, security and identity-provider support.
 - [MCP gateway design](docs/mcp-gateway-design.md) (draft, not yet built): how Claude, ChatGPT, Copilot and Gemini connect through a bank-run MCP gateway.
+- [Veridact agent identity](docs/veridact-agent-identity.md) (draft, not yet built): how Valet knows which agent it is talking to, using client attestation, SD-JWT VC and Token Status List, plus known-assistant entries for Claude, ChatGPT, Gemini and Copilot.
 - [Control framework mapping](docs/control-framework-mapping.md): Valet against a bank control framework for AI agents (autonomy tiers, assurance states, the minimum evidence set, stopping an agent, board questions) and against South African, EU and UK regulation.
 
 The proof of concept contains:
