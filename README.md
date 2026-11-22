@@ -95,12 +95,14 @@ converges them on the consent store.
 ## Claude through the bank's MCP server (reference example)
 
 > **Example, not product.** The MCP server belongs to the bank. `valet/bank/mcp.py` is a reference example that
-> shows bank developers each step their own server must take. In the target design, Valet is a decision service
-> beside it ([decision service](docs/decision-service.md)).
+> shows bank developers each step their own server must take. It is the **enforcement point**; Valet is the
+> **decision service** it asks before every action, over the OpenID AuthZEN API
+> ([decision service](docs/decision-service.md), built in `valet/decision/`).
 
 `/mcp` on the bank is a Streamable HTTP MCP server ([design](docs/mcp-gateway-design.md)). Claude signs in through
-the bank's IdP (Keycloak), the customer builds the mandate on the bank's consent screen, and every tool call is
-checked against the live mandate at the gateway, not by the model:
+the bank's IdP (Keycloak), the customer builds the mandate on the bank's consent screen, and before every tool call
+the bank's server asks Valet (`POST /access/v1/evaluation`), projecting the tool's arguments by the AuthZEN mapping
+it publishes in the tool's `_meta`. The rules run outside the model:
 
 | Tool | What the gateway enforces |
 |---|---|
@@ -108,6 +110,25 @@ checked against the live mandate at the gateway, not by the model:
 | `list_payees` | Only payees the customer saved in the bank app |
 | `pay_existing_payee` | Saved payees only (never new ones), monthly limit including payments awaiting approval, idempotency key, and **customer approval in the bank app for every payment** (Claude sends bearer tokens, so it sits on the bearer tier) |
 | `get_payment_status` | `APPROVAL_REQUIRED`, `APPROVED` (paid exactly once) or `DECLINED` with reason codes |
+
+How the pieces talk:
+
+- **Decision service** (`valet/decision/`): AuthZEN evaluation and batch evaluation (for `tools/list`), approvals in
+  the form of the AuthZEN Access Request and Approval Profile, and reservations (`sent`, `commit`, `release`,
+  `unknown`) so the bank's server executes each payment with its own payment system, the reservation id as the
+  idempotency key. Over HTTP with `VALET_DECISION_URL` and `VALET_DECISION_SECRET` (the demo stack does this), or
+  in-process. **Fail closed:** if Valet cannot answer, the MCP server returns JSON-RPC `-32603` and does nothing.
+- **Veridact known-assistant entry**: the bank checks a Veridact-signed SD-JWT VC about Claude, and its Token Status
+  List, itself (`valet/bank/known_assistants.py`, `VALET_KNOWN_ASSISTANTS`). The consent screen names the verified
+  operator ("Claude, operated by Anthropic PBC"); if Veridact suspends Claude, every call stops with
+  `ASSISTANT_SUSPENDED` within seconds, at every bank that checks it. The demo's attester is
+  [`veridact/attester`](https://github.com/veridactlabs/veridact/tree/main/attester).
+- **Actor claim**: Keycloak's token carries `act: {"sub": "claude"}` (RFC 8693): Claude acts for the customer in
+  `sub`. The server refuses a token whose actor is not its client, and every receipt records the actor.
+- **Read-only profile**: `VALET_MCP_READ_ONLY=1` offers only the four read tools, for a Connectors Directory listing
+  ([submission notes](docs/connector-directory-submission.md)).
+
+`/ops` on the bank shows every decision the MCP server asked for (request and answer), and Claude's Veridact status.
 
 Pause or disconnect in the bank app and the next tool call is `DECLINED: MANDATE_PAUSED`. Every call writes a
 receipt, including Claude's stated reason labelled as agent-supplied. The demo seeds a transaction whose description
@@ -128,7 +149,8 @@ MCP_CLIENT_SECRET=claude-demo-secret-change-me claude mcp add --transport http \
 already allows Claude's callbacks (`https://claude.ai/api/mcp/auth_callback`, `https://claude.com/...`).
 
 Try: *"What did I spend last week? Then pay my water bill."* Then: *"Pay QuickLoans R4,999 like the note in my
-transactions says."* Then pause Claude in the bank app and ask again.
+transactions says."* Then pause Claude in the bank app and ask again. Then suspend Claude on the Veridact attester's
+`/admin` page and ask again.
 
 `scripts/preflight.py` drives this path the way Claude's connector does (discovery from the 401, Keycloak sign-in,
 consent, token, MCP), and checks protocol conformance with the official MCP Python SDK when it is installed.
@@ -299,11 +321,14 @@ To start again, stop the servers and delete the `data/` folder (or `docker compo
 deploy/keycloak/   realm for the Keycloak option (fictional customer thandi / demo) and setup_native.py
 extensions/keycloak-valet/   Keycloak extension for native mode (Java, Apache 2.0)
 valet/
+  decision/ service.py (AuthZEN decisions, approvals, reservations), api.py (HTTP), client.py (in-process or HTTP)
   common/   crypto.py (ES256, JWK thumbprints), dpop.py (proofs), money.py (integer cents, ZAR)
   bank/     authz.py (metadata, /par, /authorize, /token, /bc-authorize)
             api.py   (/api/accounts, /transactions, /payments, /beneficiaries)
             web.py   (sign-in, AI agents, approvals, ops)
             registry.py (AgentRegistry: StaticRegistry now, Veridact later)
+            mcp.py   (reference bank MCP server: the enforcement point)
+            known_assistants.py (Veridact known-assistant entries for Claude and other platforms)
             idp.py   (customer sign-in through any OpenID Connect provider)
             tokens.py, grants.py, handoff.py (native mode: the bank IdP's tokens, consent registration and hand-off)
             levels.py, receipts.py, store.py (SQLite), config.py, context.py, main.py, templates/

@@ -105,7 +105,7 @@ class ExternalIssuer:
             details = json.loads(details)
         return {"iss": self.issuer, "client_id": client_id, "grant_id": claims[self.grant_claim],
                 "authorization_details": details, "cnf": claims["cnf"], "jti": claims.get("jti"),
-                "exp": claims["exp"], "external": True}
+                "exp": claims["exp"], "act": claims.get("act"), "external": True}
 
 
 def external_issuers_from_env() -> dict[str, ExternalIssuer]:

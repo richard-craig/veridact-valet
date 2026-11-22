@@ -123,6 +123,12 @@ def router(bank: Bank) -> APIRouter:
         svc.authorise(c, cus["id"], resources)
         return {"decision": "allow", "grant_id": c["id"]}
 
+    def assistant_refusal(name: str, a: dict[str, Any]) -> str:
+        if a["status"] == "unavailable":
+            return f"The bank cannot check {name} with Veridact right now, so it cannot connect. Try again shortly."
+        return (f"Veridact has {a['status']} {name} ({a.get('operator') or 'its operator'}), so the bank will not "
+                "connect it. Nothing has been shared.")
+
     @r.get("/consent", response_class=HTMLResponse)
     def consent(request: Request, ticket: str = ""):
         try:
@@ -132,11 +138,14 @@ def router(bank: Bank) -> APIRouter:
             cus, agent = context(t)
         except HandoffError as e:
             return error_page(request, str(e))
+        assistant = bank.assistant(agent.client_id)
+        if assistant and assistant["status"] != "valid":
+            return error_page(request, assistant_refusal(agent.name, assistant))
         level = t.get("requested_level") if t.get("requested_level") in L.LEVELS else "view_only"
         accounts = store.q("SELECT * FROM accounts WHERE customer=?", cus["id"])
         payees = store.q("SELECT id, name, account FROM beneficiaries WHERE customer=? ORDER BY name", cus["id"])
         return render(request, "consent.html", bank, customer=cus, agent=agent, client_id=agent.client_id,
-                      action="/handoff/decision", hidden={"ticket": ticket}, preselect=level, levels=L.LEVELS,
+                      assistant=assistant, action="/handoff/decision", hidden={"ticket": ticket}, preselect=level, levels=L.LEVELS,
                       accounts=accounts, payees=payees, intent=L.clean_intent(t.get("intent")) or "",
                       days=cfg.max_grant_days, **L.consent_options(cfg))
 
@@ -162,6 +171,9 @@ def router(bank: Bank) -> APIRouter:
             except HandoffError as e:
                 return error_page(request, str(e))
         elif form.get("decision") == "allow":
+            assistant = bank.assistant(agent.client_id)
+            if assistant and assistant["status"] != "valid":
+                return error_page(request, assistant_refusal(agent.name, assistant))
             try:
                 g = create_grant(bank, cus, agent, str(form.get("level", "view_only")), str(form.get("account", "")),
                                  int(form.get("monthly") or 2_000_00), via="bank identity provider (consent hand-off)",

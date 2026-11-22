@@ -6,6 +6,14 @@
 <form class="card agentrow" method="post" action="/ops/agents/{{ a.client_id }}/trust"><span class="av">{{ a.name[0] }}</span><div style="flex:1"><b>{{ a.client_id }}</b> · {{ a.operator }}<div class="sub">{{ 'Trusted' if a.trusted else 'Not trusted' }}</div></div>
 <input type="hidden" name="trusted" value="{{ '0' if a.trusted else '1' }}"><button class="linkbtn" type="submit">{{ 'Withdraw trust' if a.trusted else 'Restore trust' }}</button></form>
 {% endfor %}
+{% if assistants %}<h2>Known assistants (Veridact)</h2>
+<p class="sub">Checked by the bank itself: the SD-JWT VC entry and the Token Status List, with the attester's published keys.</p>
+{% for a in assistants %}<div class="card agentrow"><span class="av">{{ (a.name or a.client_id)[0] }}</span><div style="flex:1"><b>{{ a.name or a.client_id }}</b>{% if a.operator %}, operated by {{ a.operator }}{% endif %}
+<div class="sub">{{ a.status }}{% if a.max_level %} · ceiling {{ a.max_level }}{% endif %}{% if a.detail %} · {{ a.detail }}{% endif %}</div><div class="mono">{{ a.entry }}</div></div></div>{% endfor %}
+{% if attester_admin %}<p><a class="linkbtn" href="{{ attester_admin }}" target="_blank">Open the Veridact attester (suspend or restore)</a></p>{% endif %}{% endif %}
+<h2>Decision service (AuthZEN)</h2>
+<p class="sub">What the bank's MCP server asked Valet, newest first. Transport: {{ transport }}. The server enforces; Valet decides.</p>
+{% for d in decisions %}<details class="card"><summary><span class="mono">{{ d.at }}</span> · <b>{{ d.what }}</b> · {{ d.verdict }}</summary><pre class="mono" style="white-space:pre-wrap;font-size:12px">{{ d.json }}</pre></details>{% else %}<div class="card sub">No decisions yet.</div>{% endfor %}
 <h2>Receipt chain</h2>
 <div class="card">{% if chain.ok %}✓ {{ chain.count }} receipts, chain intact<div class="mono">head {{ chain.head[:30] }}…</div>{% else %}<span class="err">Broken at receipt {{ chain.broken_at }}: {{ chain.why }}</span>{% endif %}</div>
 {% endblock %}

@@ -1,7 +1,10 @@
 # Valet decision service: AuthZEN interface, reservations and the shared store
 
-Draft v0.2 · 22 November 2026 · Design, not yet built. v0.2 aligns requests with the AuthZEN COAZ-MCP binding and approvals with the AuthZEN Access Request and Approval Profile. Today the proof of concept runs these checks in-process
-(`valet/bank/payments.py`, `valet/bank/mcp.py`); this document is how they become a service the bank calls.
+Draft v0.3 · 22 November 2026 · **Built for the MCP channel** in `valet/decision/` (service, HTTP API, client), and
+the reference MCP server (`valet/bank/mcp.py`) asks it before every action. v0.2 aligned requests with the AuthZEN
+COAZ-MCP binding and approvals with the AuthZEN Access Request and Approval Profile. v0.3 records what was built and
+where it differs (see [What the PoC builds](#what-the-poc-builds)). The direct API (Lane B) still runs the same checks
+in-process (`valet/bank/payments.py`, `valet/bank/mandate.py`).
 
 ## Summary
 
@@ -330,6 +333,32 @@ A checklist for the bank's developers. The reference MCP server (`valet/bank/mcp
 6. Never retry a payment under a new idempotency key.
 7. Pass the agent's stated reason through, labelled as agent-supplied.
 8. Run the PEP conformance tests in CI.
+
+## What the PoC builds
+
+| Part | Built | Notes |
+|---|---|---|
+| `GET /.well-known/authzen-configuration` | Yes | Also names `access_request_endpoint` and `valet_reservations_endpoint` |
+| `POST /access/v1/evaluation` | Yes | Requests as in the COAZ-MCP binding; denies are `decision: false` with `context.reason` |
+| `POST /access/v1/evaluations` | Yes | Filters `tools/list`; nothing reserved, no receipt |
+| AARP access request and task | Yes | `POST /access/v1/access_requests` (binding token), `GET …/{id}`; the task is the bank app's approval |
+| Re-evaluation with `context.approval` | Yes | Single use: a second re-evaluation is `approval_expired` |
+| Reservations: `GET`, `sent`, `commit`, `release`, `unknown` | Yes | `sent` returns `claimed`: only the caller that claimed it sends the payment |
+| Authentication of enforcement points | Shared bearer secret | `VALET_DECISION_SECRET`; a bank uses mTLS or `private_key_jwt` |
+| Fail closed in the enforcement point | Yes | Timeouts, errors and a permit without `context.valet` give JSON-RPC `-32603` |
+| `context.veridact` | Known-assistant entries | The MCP server checks Claude's entry and passes the result; Valet refuses on `withdrawn`, `suspended`, or (for payments) `unavailable`, and applies `max_level` as a ceiling |
+| Shared store | SQLite in the PoC | The same locked read-check-write; PostgreSQL remains the reference for a bank |
+| Direct API (Lane B) through the service | Not yet | It calls the same mandate check in-process |
+
+**Where the mapping lives.** The design above puts `x-authzen-mapping` in each tool's `inputSchema`. The PoC
+publishes it in the tool's `_meta` (`net.veridact/authzen-mapping`) instead, so no assistant's JSON Schema validator
+meets an unknown keyword. The PEP conformance rule is unchanged and tested: every argument a tool accepts is
+projected (`tests/test_decision.py`).
+
+**Reason names.** `context.reason` uses the profile's seven reasons plus Valet's own (`not_permitted`,
+`account_not_on_mandate`, `mandate_paused`, `agent_untrusted`, `assistant_suspended`, `bearer_tier`,
+`assistant_ceiling` and others, listed in the metadata's `valet_reasons`). The reference MCP server maps them to its
+upper-case reason codes.
 
 ## Open questions
 

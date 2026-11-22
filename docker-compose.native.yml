@@ -14,6 +14,13 @@
 # Addresses: the browser uses the public URLs; containers reach each other by service name. Keycloak's
 # dynamic backchannel gives containers keycloak:8080 endpoints while tokens keep the public issuer.
 
+# Veridact (outside the bank in real life): the known-assistant attester, built from the public veridact repo. It
+# signs an SD-JWT VC entry about Claude and publishes the status list the bank checks on every call. Its admin page
+# (/admin, VERIDACT_ADMIN_SECRET) suspends or restores Claude: the kill switch.
+#
+# The bank's MCP server asks the Valet decision service over HTTP on 127.0.0.1 (AuthZEN), as a separate service would
+# be asked; /ops shows every request and answer.
+
 x-demo-secrets: &secrets
   VALET_HANDOFF_SECRET: ${VALET_HANDOFF_SECRET:-demo-handoff-secret-change-me-0123456789}
   VALET_INTERNAL_SECRET: ${VALET_INTERNAL_SECRET:-demo-internal-secret-change-me-0123456789}
@@ -65,12 +72,37 @@ services:
       VALET_MCP_RESOURCE: ${BANK_URL:-http://localhost:8000}/mcp
       VALET_MCP_AUTH_SERVER: ${IDP_URL:-http://localhost:8080}/realms/marula
       DEMO_SEED_INJECTION: "1"    # a transaction description that tries to instruct an AI assistant
+      # The Valet decision service: published by the bank app, asked over HTTP by its MCP server
+      VALET_DECISION_SECRET: ${VALET_DECISION_SECRET:-demo-decision-secret-change-me-0123456789}
+      VALET_DECISION_URL: http://127.0.0.1:8000
+      # Lane A: Claude must have a valid Veridact known-assistant entry
+      VALET_KNOWN_ASSISTANTS: >-
+        {"issuer": "${VERIDACT_URL:-http://localhost:8100}", "fetch": "http://veridact:8100",
+         "entries": {"claude": "claude"}, "cache_seconds": ${VALET_KNOWN_ASSISTANT_CACHE:-5}}
+      VERIDACT_ADMIN_URL: ${VERIDACT_URL:-http://localhost:8100}/admin
     volumes: [valetdata:/data]
     ports: ["8000:8000"]
     depends_on:
       keycloak: {condition: service_healthy}
+      veridact: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/.well-known/oauth-authorization-server', timeout=3)"]
+      interval: 3s
+      retries: 40
+
+  veridact:
+    build:
+      context: ${VERIDACT_REPO:-https://github.com/veridactlabs/veridact.git#main}
+      dockerfile: attester/Dockerfile
+    image: veridact/attester
+    environment:
+      VERIDACT_ISSUER: ${VERIDACT_URL:-http://localhost:8100}
+      VERIDACT_ADMIN_SECRET: ${VERIDACT_ADMIN_SECRET:-demo-veridact-admin-change-me}
+      VERIDACT_STATUS_TTL: ${VERIDACT_STATUS_TTL:-5}      # demo: a suspension shows within seconds
+    volumes: [veridactdata:/data]
+    ports: ["8100:8100"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=3)"]
       interval: 3s
       retries: 40
 
@@ -133,3 +165,4 @@ services:
 
 volumes:
   valetdata:
+  veridactdata:
