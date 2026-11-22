@@ -61,6 +61,21 @@ class BankConfig:
     # VALET_HANDOFF_IDPS='{"keycloak:marula": "http://localhost:8080/realms/marula/"}'
     handoff_idps: dict = field(default_factory=lambda: json.loads(os.environ.get("VALET_HANDOFF_IDPS", "{}")))
 
+    def secret_problems(self) -> list[str]:
+        """Secrets that must not reach a real deployment. Checked at start-up whenever the bank is served over
+        HTTPS (the demo's localhost runs over HTTP and keeps its convenience defaults)."""
+        if not self.issuer.startswith("https://"):
+            return []
+        out = []
+        def weak(v: str) -> bool:
+            return len(v) < 32 or "change-me" in v or v.startswith("demo-")
+        if weak(self.session_secret):
+            out.append("BANK_SESSION_SECRET is a demo default or shorter than 32 characters")
+        for name, value in (("VALET_INTERNAL_SECRET", self.internal_secret), ("VALET_HANDOFF_SECRET", self.handoff_secret)):
+            if value and weak(value):
+                out.append(f"{name} is a demo default or shorter than 32 characters")
+        return out
+
     @property
     def database(self) -> str:
         if self.db_path is not None:

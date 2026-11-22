@@ -36,6 +36,40 @@ Optional: `LABEL` (default `valet`; empty for `bank.<zone>`), `RG`, `LOCATION`, 
 certificates: allow 8 to 12 minutes. Secrets are written to `valet-demo-secrets.env` next to you; keep that file, as
 re-running the script reuses it.
 
+### With Azure Key Vault (recommended for anything a bank will look at)
+
+Add `KEY_VAULT=1`:
+
+```bash
+KEY_VAULT=1 SUBSCRIPTION="CoffeeMedicine" DNS_ZONE="<your zone>" DNS_ZONE_RG="<zone's resource group>" \
+ADMIN_CIDR="<your IP>/32" ./deploy/azure/deploy.sh
+```
+
+The script then:
+
+- creates an RBAC Key Vault (`kv-valet-<8 characters>`) in the same resource group and region, and gives you Key Vault
+  Administrator on it
+- creates the three signing keys inside the vault (EC P-256, `sign` and `verify` only): `valet-as`, `valet-receipts`
+  and `valet-consent-events`
+- generates the secrets and stores them in the vault, not on your machine
+- gives the VM a system-assigned managed identity with **Key Vault Crypto User** and **Key Vault Secrets User** on
+  that vault only
+
+At first boot the VM reads its secrets from the vault with its managed identity, so none travel in the VM's custom
+data. The bank signs tokens, receipts and consent events through the vault: the private keys never reach the VM.
+Check it with `curl https://bank.valet.<zone>/readyz`: `keys` should show `azure-kv` for each purpose.
+
+Read a secret (for the preflight or the Claude connector) with:
+
+```bash
+az keyvault secret show --vault-name <vault> -n demo-password --query value -o tsv
+az keyvault secret show --vault-name <vault> -n claude-client-secret --query value -o tsv
+```
+
+The script prints the vault's name at the end. Without `KEY_VAULT=1`, the secrets travel in custom data and the keys
+are PEM files on the VM's disk; that is fine for a private rehearsal, not for a security review. Key management is
+described in section 21 of `docs/technical-design.md`.
+
 ## Check it
 
 From a laptop with the repository and Python 3.11+ (`pip install -r requirements.txt mcp`; without the `mcp` SDK the last check is skipped and you get 37/37):
@@ -71,5 +105,5 @@ prints the command).
 
 ## Limits
 
-This is a demo: Keycloak runs in development mode with its built-in database, there is one VM and no backup, and the
-customer and agents are fictional. Do not put real customer data or real bank credentials in it.
+This is a demo: Keycloak runs in development mode with its built-in database, the Valet store is SQLite on the VM's
+disk, there is one VM and no backup, and the customer and agents are fictional. Do not put real customer data or real bank credentials in it.

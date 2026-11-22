@@ -21,6 +21,7 @@ from typing import Any
 import jwt
 
 from ..common.crypto import Key, digest, verify
+from ..common.signers import jws_kid
 from .config import SAST
 from .store import Store
 
@@ -38,9 +39,10 @@ def personal_hash(value: str, salt: str) -> str:
 
 
 class Receipts:
-    def __init__(self, store: Store, key: Key):
+    def __init__(self, store: Store, key: Key, ring: Any = None):
         self.store = store
-        self.key = key
+        self.key = key                   # the active receipt signer (a Key, or a signer from valet/common/signers.py)
+        self.ring = ring                 # all receipt keys, including previous ones kept for verification
         self.policy: Any = None          # set by the bank once its policy is known (policy.py)
         store.db.executescript(SCHEMA)
 
@@ -106,9 +108,14 @@ class Receipts:
                 return {"ok": False, "broken_at": rec["seq"], "why": "previous hash does not match"}
             if digest(rec) != r["hash"]:
                 return {"ok": False, "broken_at": rec["seq"], "why": "record was altered"}
-            try:
-                claims = verify(r["signature"], self.key.jwk)
-            except jwt.PyJWTError:
+            claims = None
+            for jwk in (self.ring.find(jws_kid(r["signature"])) if self.ring else [self.key.jwk]):
+                try:
+                    claims = verify(r["signature"], jwk)
+                    break
+                except jwt.PyJWTError:
+                    continue
+            if claims is None:
                 return {"ok": False, "broken_at": rec["seq"], "why": "bad signature"}
             if claims != {"seq": rec["seq"], "hash": r["hash"]}:
                 return {"ok": False, "broken_at": rec["seq"], "why": "signature covers a different record"}

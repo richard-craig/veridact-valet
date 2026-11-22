@@ -33,6 +33,7 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from ..common.signers import KeyRing
 from ..common.crypto import Key, random_id
 from ..common.dpop import DPoPError, check_proof
 from ..common.money import rand, to_cents, to_str
@@ -214,7 +215,8 @@ class ConsentService:
         self.store.db.executescript(SCHEMA)
         self.clients = clients if clients is not None else clients_from_env()
         in_memory = str(bank.cfg.database) == ":memory:"
-        self.event_key = Key.generate() if in_memory else Key.load_or_create(bank.cfg.data_dir / "keys" / "consent-events.pem")
+        self.event_keys = KeyRing.load("consent-events", bank.cfg.data_dir / "keys" / "consent-events.pem", in_memory)
+        self.event_key = self.event_keys.active
         self.http = http
         self.deliver_inline = False          # tests: deliver webhooks before returning
 
@@ -425,7 +427,7 @@ class ConsentService:
         claims = {"iss": self.bank.cfg.issuer, "iat": now, "jti": jti, "aud": c["client_id"],
                   "events": {EVENT_TYPE: {"consent_id": c["id"], "status": c["status"], "previous_status": previous,
                                           "status_reason": c["status_reason"], "changed_at": iso(c["status_updated"])}}}
-        token = self.event_key.sign(claims, headers={"typ": "secevent+jwt", "kid": "consent-events-1"})
+        token = self.event_key.sign(claims, headers={"typ": "secevent+jwt"})
         self.store.x("INSERT INTO consent_events (id, client_id, consent_id, token, created) VALUES (?,?,?,?,?)",
                      jti, c["client_id"], c["id"], token, time.time())
         cl = self.clients.get(c["client_id"])
@@ -718,7 +720,7 @@ def routers(bank: Bank, svc: ConsentService) -> tuple[APIRouter, APIRouter]:
     @r.get("/jwks")
     async def jwks():
         """Keys that sign consent events (webhooks), so applications can verify them."""
-        return {"keys": [{**svc.event_key.jwk, "kid": "consent-events-1", "use": "sig", "alg": "ES256"}]}
+        return {"keys": svc.event_keys.jwks()}
 
     # ---- the customer's own channel (first party: the bank app session)
     from .web import current_customer, csrf_ok, csrf_token, render  # noqa: E402  (avoid import cycle)

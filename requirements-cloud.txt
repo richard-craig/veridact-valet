@@ -1,0 +1,4 @@
+# Optional: signing keys in a cloud key service (valet/common/signers.py). Install with the base requirements.
+azure-identity>=1.17
+azure-keyvault-keys>=4.9
+boto3>=1.34

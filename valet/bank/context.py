@@ -8,6 +8,7 @@ import jwt
 from fastapi.responses import JSONResponse
 
 from ..common.crypto import Key, verify
+from ..common.signers import KeyRing, jws_kid
 from .config import BankConfig
 from .core import CoreBanking, DemoCore
 from .idp import OidcConfig, OidcSignIn
@@ -41,14 +42,18 @@ class Bank:
                  signin: OidcSignIn | None = None, external_issuers: dict[str, ExternalIssuer] | None = None,
                  core: CoreBanking | None = None):
         self.cfg = cfg or BankConfig()
+        if problems := self.cfg.secret_problems():          # fail closed: never serve HTTPS on demo secrets
+            raise RuntimeError("refusing to start: " + "; ".join(problems))
         self.store = Store(self.cfg.database)
         self.store.seed_demo()
         in_memory = self.cfg.db_path is not None and str(self.cfg.db_path) == ":memory:"
         keys = self.cfg.data_dir / "keys"
-        self.as_key = Key.generate() if in_memory else Key.load_or_create(keys / "authorization-server.pem")
-        self.receipt_key = Key.generate() if in_memory else Key.load_or_create(keys / "receipts.pem")
+        # Key rings: the active signer plus previous keys still published for verification (valet/common/signers.py).
+        self.as_keys = KeyRing.load("as", keys / "authorization-server.pem", in_memory)
+        self.receipt_keys = KeyRing.load("receipts", keys / "receipts.pem", in_memory)
+        self.as_key, self.receipt_key = self.as_keys.active, self.receipt_keys.active
         self.registry = registry or StaticRegistry(self.cfg.data_dir, self.cfg.registry_cache_s)
-        self.receipts = Receipts(self.store, self.receipt_key)
+        self.receipts = Receipts(self.store, self.receipt_key, self.receipt_keys)
         # Valet never executes a payment: it instructs the bank's core banking API (the PoC's fictional one here).
         self.core: CoreBanking = core or DemoCore(self.store)
         self.payments = Payments(self.store, self.core, self.receipts, self.cfg.reconcile_after, self.cfg.escalate_after)
@@ -91,7 +96,8 @@ class Bank:
                 "denylist_entries": self.store.one("SELECT COUNT(*) n FROM denylist")["n"],
                 "payments_escalated": len(self.payments.escalated()),
                 "native_issuers": sorted(self.external_issuers),
-                "policy": {**self.policy.ref, "labelled": self.policy.labelled}}
+                "policy": {**self.policy.ref, "labelled": self.policy.labelled},
+                "keys": {"as": self.as_keys.custody(), "receipts": self.receipt_keys.custody()}}
 
     def native_issuer(self, hint: str | None = None) -> str | None:
         """The token issuer a native-mode grant is bound to: the one named, or the only one configured."""
@@ -215,7 +221,7 @@ class Bank:
         if approval:
             claims["once"] = True
             claims["approval"] = approval
-        return self.as_key.sign(claims, headers={"typ": "at+jwt", "kid": "as-1"})
+        return self.as_key.sign(claims, headers={"typ": "at+jwt"})
 
     def verify_access_token(self, token: str) -> dict[str, Any]:
         """Valet's own tokens (federated mode) or the bank's authorisation server's (native mode)."""
@@ -230,8 +236,11 @@ class Bank:
                 raise OAuthError("invalid_token", f"access token rejected: {e}", 401) from e
         if iss != self.cfg.issuer:
             raise OAuthError("invalid_token", "access token from an issuer this bank does not accept", 401)
-        try:
-            return verify(token, self.as_key.jwk, audience=self.cfg.api_audience, issuer=self.cfg.issuer,
-                          options={"require": ["exp", "grant_id", "cnf"]})
-        except jwt.PyJWTError as e:
-            raise OAuthError("invalid_token", f"access token rejected: {e}", 401) from e
+        err: jwt.PyJWTError | None = None
+        for jwk in self.as_keys.find(jws_kid(token)):     # the signing key, or every key during a rotation
+            try:
+                return verify(token, jwk, audience=self.cfg.api_audience, issuer=self.cfg.issuer,
+                              options={"require": ["exp", "grant_id", "cnf"]})
+            except jwt.PyJWTError as e:
+                err = e
+        raise OAuthError("invalid_token", f"access token rejected: {err}", 401) from err

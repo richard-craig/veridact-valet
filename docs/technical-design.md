@@ -511,7 +511,7 @@ Agent ecosystems identify an agent by an HTTPS URL serving its metadata and sign
 | Endpoint | Caller | Authentication | What it does |
 | --- | --- | --- | --- |
 | `GET /.well-known/oauth-authorization-server` | Agent | None | Metadata: endpoints, `private_key_jwt`, ES256 DPoP, RAR types, CIBA poll mode |
-| `GET /jwks` | Anyone | None | Bank public keys: access tokens (`as-1`) and receipts (`receipts-1`) |
+| `GET /jwks` | Anyone | None | Bank public keys for access tokens and receipts, active and previous, each with a `kid` derived from the key (`as-…`, `receipts-…`; §21) |
 | `POST /par` | Agent | `private_key_jwt` | Push the connect request (PKCE S256, redirect URI, `authorization_details`, `dpop_jkt` or a DPoP proof); returns a `request_uri` valid for 60 seconds |
 | `GET /authorize` | Browser | Customer session | Consent screen for a pushed request; asks the customer to sign in first if needed |
 | `POST /authorize/decision` | Browser | Session and CSRF token | The customer's choice: creates the grant, bound to the agent's key, and a single-use 60-second code, or returns `access_denied`. The redirect carries `iss` |
@@ -874,3 +874,73 @@ Version 0.8 (17 November 2026) builds the [Valet profile](valet-profile.md) (`va
 | Standards route | Assessed against the OAuth working group's current agent drafts; recommended route in profile §8 | Documented |
 
 **Verified on 17 November 2026 (version 0.8):** 24 of 24 demo checks and 145 of 145 tests passed on Python 3.13. The Keycloak preflight was not re-run.
+
+## 21. Key and secrets management
+
+**The bank holds every key that matters, in the key service it already runs, and Valet never sees a private key it
+doesn't need.** Signing keys sit behind one interface (`valet/common/signers.py`), so the same code signs with a PEM
+file in a demo, Azure Key Vault or Managed HSM, or AWS KMS. With a cloud key, Valet sends a SHA-256 digest and gets
+back a signature: the private key never leaves the vault.
+
+### 21.1 Inventory
+
+| Key or secret | Used for | Custodian | Production storage | Rotation | If it leaks |
+| --- | --- | --- | --- | --- | --- |
+| Access-token signing key (`as`) | Signing Valet-issued access tokens (federated mode) | Bank | HSM or cloud key service, EC P-256, sign-only, non-exportable | Yearly, or at once on suspicion; previous key published until its last token expires (5 minutes) | Rotate; revoke grants issued since the suspected leak |
+| Receipt signing key (`receipts`) | Signing receipts, chain heads and evidence packs | Bank | As above | Yearly; **previous keys stay published, for verification only, for the whole receipt retention period** | Rotate; publish the compromise time; receipts signed after it are treated as unproven |
+| Consent-event key (`consent-events`) | Signing consent events to third-party apps | Bank | As above | Yearly; previous key published for a week | Rotate; tell subscribers |
+| Native-mode tokens | Issued by the bank's identity platform | Bank | The identity platform's own key store | The platform's policy | The platform's procedure |
+| Session secret | Signing the bank web session cookie | Bank | Secret store, injected at runtime | Quarterly; rotation signs customers out | Rotate |
+| IdP hand-off and internal secrets | IdP to Valet calls in native mode | Bank | Secret store; **production: mTLS instead** | Quarterly | Rotate; check the hand-off log |
+| Client secrets (for example the Claude connector) | Confidential OAuth clients | Bank, and the platform (Anthropic-held credentials) | Identity platform; the AI platform's own vault | Yearly | Rotate in both places |
+| Agent private keys | DPoP proofs and client assertions | Agent operator | The operator's KMS, TPM or HSM | The operator's policy, with Veridact key events (Veridact v0.5) | Operator rotates; the bank's denylist or Veridact withdrawal stops it at once |
+
+### 21.2 Configuration
+
+Each purpose takes a key URI, plus optional previous keys:
+
+```
+VALET_KEY_AS=azure-kv:https://<vault>.vault.azure.net/keys/valet-as
+VALET_KEY_RECEIPTS=aws-kms:arn:aws:kms:af-south-1:<account>:key/<id>
+VALET_KEY_RECEIPTS_PREVIOUS=aws-kms:arn:aws:kms:af-south-1:<account>:key/<old-id>
+```
+
+Unset means a PEM file under the data directory, written with mode `0600` in a `0700` folder. That is for demos and
+tests only, and `/readyz` reports each key's provider, so a go-live check can refuse file keys.
+
+On-premises HSMs over PKCS#11 (Thales Luna, Entrust nShield) fit the same interface: a signer that opens a session,
+finds the key by label and signs a digest with `CKM_ECDSA`. That signer is **Designed**, not built; Azure Managed HSM
+and AWS CloudHSM-backed KMS keys cover FIPS 140-3 Level 3 today.
+
+### 21.3 Rotation without breaking evidence
+
+Every signature names its key: `kid` is derived from the key itself (`receipts-<first 8 of its RFC 7638
+thumbprint>`), so a new key gets a new `kid` with nothing to configure. To rotate:
+
+1. Create the new key in the vault and set it as the purpose's key. Move the old key URI to `…_PREVIOUS`.
+2. Restart. `/jwks` now publishes both, the new one signs, and verification picks the key by `kid`.
+3. Retire the old key from `…_PREVIOUS` only when nothing it signed still needs to verify: five minutes for access
+   tokens, the **retention period** for receipts. Retired receipt keys go to the evidence archive with their
+   validity dates, never deleted.
+
+`tests/test_keys.py` shows a rotation end to end: tokens and receipts signed before it still verify, and removing
+the previous receipt key makes old receipts fail, which is why receipt keys stay published.
+
+### 21.4 Fail closed
+
+Served over HTTPS, the bank refuses to start with a demo or short secret (`BankConfig.secret_problems`): the session
+secret, the hand-off secret and the internal secret must each be at least 32 characters and not a known demo value.
+
+### 21.5 The hosted demo
+
+`deploy/azure/deploy.sh` with `KEY_VAULT=1`:
+
+- creates an Azure Key Vault in South Africa North with RBAC
+- generates the three signing keys inside it (EC P-256, `sign` and `verify` only)
+- stores every secret in it
+- gives the VM a managed identity with **Key Vault Crypto User** and **Key Vault Secrets User** on that vault, and
+  nothing else
+
+The VM reads its secrets at first boot, with tracing off, so none travel in the VM's custom data, none are saved on
+the operator's machine and none appear in the boot log. The bank signs through the vault. Without `KEY_VAULT=1`, the
+demo keeps its earlier behaviour: generated secrets in custom data and a local file, and PEM keys on the VM's disk.

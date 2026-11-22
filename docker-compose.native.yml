@@ -42,7 +42,7 @@ services:
       start_period: 20s
 
   bank:
-    build: .
+    build: {context: ., args: {CLOUD_EXTRAS: "${CLOUD_EXTRAS:-}"}}
     image: veridact-valet/app
     command: uvicorn valet.bank.main:get_app --factory --host 0.0.0.0 --port 8000
     environment:
@@ -65,6 +65,10 @@ services:
       VALET_MCP_RESOURCE: ${BANK_URL:-http://localhost:8000}/mcp
       VALET_MCP_AUTH_SERVER: ${IDP_URL:-http://localhost:8080}/realms/marula
       DEMO_SEED_INJECTION: "1"    # a transaction description that tries to instruct an AI assistant
+      # Signing keys: empty = PEM files in /data/keys (demo). Key Vault: azure-kv:https://<vault>.vault.azure.net/keys/<name>
+      VALET_KEY_AS: ${VALET_KEY_AS:-}
+      VALET_KEY_RECEIPTS: ${VALET_KEY_RECEIPTS:-}
+      VALET_KEY_CONSENT_EVENTS: ${VALET_KEY_CONSENT_EVENTS:-}
     volumes: [valetdata:/data]
     ports: ["8000:8000"]
     depends_on:
