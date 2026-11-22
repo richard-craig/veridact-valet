@@ -215,6 +215,7 @@ class Bank:
         claims: dict[str, Any] = {
             "iss": self.cfg.issuer, "aud": self.cfg.api_audience, "sub": grant["sub"], "client_id": grant["client_id"],
             "grant_id": grant["id"], "authorization_details": details, "cnf": {"jkt": jkt},
+            "act": {"sub": grant["client_id"]},           # RFC 8693: the agent acts for the customer in "sub"
             "iat": now, "exp": int(exp) if exp else now + self.cfg.access_ttl, "jti": f"at_{now}_{id(details)}_{time.time_ns()}",
         }
         if approval:

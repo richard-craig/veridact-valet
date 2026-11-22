@@ -77,6 +77,9 @@ def router(bank: Bank) -> APIRouter:
             raise OAuthError("invalid_token", "unknown grant", 401)
         if grant["client_id"] != claims["client_id"]:
             raise OAuthError("invalid_token", "token and grant name different agents", 401)
+        act = claims.get("act")
+        if act is not None and (not isinstance(act, dict) or act.get("sub") != claims["client_id"]):
+            raise OAuthError("invalid_token", "the token's actor (act) is not the agent it was issued to", 401)
         # The binding tuple: issuer, client id, mandate id and key thumbprint must all match the grant.
         # Valet's own single-use approval tokens (its CIBA, still used in native mode) are the one other issuer.
         own_approval = claims.get("iss") == bank.cfg.issuer and claims.get("once") and not claims.get("external")
