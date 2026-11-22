@@ -9,6 +9,7 @@ so it runs anywhere.
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -479,7 +480,33 @@ def router(bank) -> APIRouter:
         trust_file = bank.cfg.data_dir / "trust.json"
         agents = json.loads(trust_file.read_text()) if trust_file.exists() else {}
         rows = [{"client_id": k, **v, "trusted": bank.registry.is_trusted(k)} for k, v in agents.items()]
-        return render(request, "ops.html", bank, agents=rows, chain=bank.receipts.verify_chain())
+        known = bank.known_assistants
+        assistants = [{"client_id": c, **bank.assistant(c)} for c in (known.entries if known else {})]
+        svc = getattr(bank, "decision_service", None)
+        decisions = [decision_line(e) for e in list(svc.log)[:15]] if svc else []
+        return render(request, "ops.html", bank, agents=rows, chain=bank.receipts.verify_chain(),
+                      assistants=assistants, decisions=decisions,
+                      transport=getattr(bank.decisions, "transport", "in-process"),
+                      attester_admin=os.environ.get("VERIDACT_ADMIN_URL", ""))
+
+    def decision_line(e: dict[str, Any]) -> dict[str, Any]:
+        """One decision the bank's MCP server asked for, as the operations page shows it."""
+        req, out = e["request"], e["response"]
+        if e["call"] == "evaluation":
+            ctx = out.get("context") or {}
+            what = (req.get("action") or {}).get("name", "")
+            if req.get("context", {}).get("approval"):
+                what += " (after approval)"
+            verdict = ("permit · " + ctx.get("valet", {}).get("outcome", "")) if out.get("decision") else \
+                ("deny · " + str(ctx.get("reason", "")))
+        elif e["call"] == "evaluations":
+            what = f"tools/list ({len(req.get('evaluations') or [])} tools)"
+            verdict = f"{sum(1 for x in out.get('evaluations', []) if x.get('decision'))} visible"
+        else:
+            what = e["call"] + " " + str(req.get("reservation", ""))[:14]
+            verdict = str(out.get("state") or out.get("status") or "")
+        return {"at": e["at"], "call": e["call"], "what": what, "verdict": verdict,
+                "json": json.dumps({"request": req, "response": out}, indent=1)[:2400]}
 
     @r.post("/ops/agents/{client_id}/trust")
     async def set_trust(request: Request, client_id: str):

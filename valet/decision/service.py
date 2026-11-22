@@ -196,11 +196,11 @@ class DecisionService:
             return
         if status in ("withdrawn", "suspended"):
             reason = f"assistant_{status}"
-            rec(reason, veridact=v)
+            rec(reason)
             raise Denied(reason, f"Veridact has {status} this assistant ({v.get('operator') or grant['client_id']})")
         if status == "unavailable" and action not in PAYMENT_ACTIONS:
             return
-        rec("assistant_not_verified", veridact=v)
+        rec("assistant_not_verified")
         raise Denied("assistant_not_verified", "this assistant has no valid Veridact known-assistant entry")
 
     def _evaluate(self, req: dict[str, Any]) -> dict[str, Any]:
@@ -546,7 +546,7 @@ class DecisionService:
         if ctx.get("act"):
             fields["act"] = ctx["act"]                    # RFC 8693: the agent acting for the customer
         v = ctx.get("veridact") or {}
-        if v:
+        if v:                                            # what Veridact said when the decision was made
             fields["veridact"] = {k: v.get(k) for k in ("entry", "operator", "status", "max_level") if v.get(k)}
         if "tier" not in kw and ctx.get("token_tier"):
             kw["tier"] = ctx["token_tier"]

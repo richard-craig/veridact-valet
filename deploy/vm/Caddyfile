@@ -21,3 +21,8 @@
 	respond @admin "Not available" 403
 	reverse_proxy keycloak:8080
 }
+
+{$VERIDACT_HOST} {
+	# Veridact's known-assistant attester (outside the bank in real life). Its admin page needs VERIDACT_ADMIN_SECRET.
+	reverse_proxy veridact:8100
+}

@@ -11,6 +11,7 @@ from ..common.crypto import Key, verify
 from .config import BankConfig
 from .core import CoreBanking, DemoCore
 from .idp import OidcConfig, OidcSignIn
+from .known_assistants import KnownAssistants
 from .payments import Payments
 from .policy import Policy
 from .receipts import Receipts
@@ -68,7 +69,7 @@ class Bank:
         self.decision_service: Any = None
         self.decisions: Any = None
         # Lane A: Veridact known-assistant entries for mainstream assistants (known_assistants.py), if configured.
-        self.known_assistants: Any = None
+        self.known_assistants: KnownAssistants | None = KnownAssistants.from_env()
 
     # ------------------------------------------------- deployment safety
     def _key_binding_mode(self) -> str:
@@ -96,7 +97,14 @@ class Bank:
                 "denylist_entries": self.store.one("SELECT COUNT(*) n FROM denylist")["n"],
                 "payments_escalated": len(self.payments.escalated()),
                 "native_issuers": sorted(self.external_issuers),
+                "known_assistants": self.known_assistants.readiness() if self.known_assistants else None,
+                "decision_service": getattr(self.decisions, "transport", None),
                 "policy": {**self.policy.ref, "labelled": self.policy.labelled}}
+
+    def assistant(self, client_id: str) -> dict[str, Any] | None:
+        """Lane A: what Veridact's known-assistant entry says about this platform client, or None if not covered."""
+        known = self.known_assistants
+        return known.check(client_id) if known and known.covers(client_id) else None
 
     def native_issuer(self, hint: str | None = None) -> str | None:
         """The token issuer a native-mode grant is bound to: the one named, or the only one configured."""
