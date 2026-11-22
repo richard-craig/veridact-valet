@@ -16,6 +16,7 @@ This repository holds the design and a working proof of concept. The design is i
 - [The Valet insurance profile](docs/valet-insurance-profile.md): the same pattern for insurers. Policy, claim and change mandates, protected actions that always go back to the customer, and receipts that keep health data out of the chain. Proposed.
 - [Technical design](docs/technical-design.md): the profile, data model, flows, check order, receipts, security and identity-provider support.
 - [MCP gateway design](docs/mcp-gateway-design.md) (draft, not yet built): how Claude, ChatGPT, Copilot and Gemini connect through the bank's own MCP server, with Valet and Veridact as sidecars.
+- [Poppy extension](docs/poppy-extension.md) (draft): Valet as a banking extension for the Personal Agent Protocol: standing mandates held by the bank, approval in the bank app, reasons and receipts, on top of Poppy's operations extension.
 - [Decision service](docs/decision-service.md) (draft, not yet built): Valet as a decision service the bank's servers call over the OpenID AuthZEN Authorization API, the reserve, commit and release extension, the shared store, and how concurrent and repeated payments are handled.
 - [Veridact agent identity](docs/veridact-agent-identity.md) (draft, not yet built): how Valet knows which agent it is talking to, using client attestation, SD-JWT VC and Token Status List, plus known-assistant entries for Claude, ChatGPT, Gemini and Copilot.
 - [Control framework mapping](docs/control-framework-mapping.md): Valet against a bank control framework for AI agents (autonomy tiers, assurance states, the minimum evidence set, stopping an agent, board questions) and against South African, EU and UK regulation.
@@ -390,6 +391,23 @@ This PoC shows the protocol and the customer experience. It leaves out what a ba
 
 A bank does not have to adopt this code as it stands. It can run the reference components, or implement the
 Valet profile on its own platform and prove it with the tests.
+
+## Playground and doctor
+
+**Playground.** Watch an agent reach a bank account without Valet, then with it, step by step, with what the bank
+checked at each step. It also runs the doctor. Everything runs in an in-process demo bank, so it's safe to host:
+
+```sh
+uvicorn valet.apps.playground:get_app --factory --port 8003
+```
+
+**Doctor.** Check a bank's setup the way an agent will meet it: Poppy discovery and risk hints, the authorisation
+server, keys, and the API and MCP server refusing what they must. It reads only public metadata and never signs in.
+
+```sh
+python -m valet.doctor https://bank.example     # a deployment
+python -m valet.doctor --self-test              # the demo bank
+```
 
 ## Licence
 

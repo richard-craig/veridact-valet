@@ -267,6 +267,22 @@ A refresh token is a cloakroom ticket. With a confidential client, the ticket on
 
 **Controls:** none inside Valet; this is the problem Valet exists to replace. Detection of browser agents on the bank's web channels is a Veridact capability (**Designed**).
 
+**Proposed: bring browser agents into a known Session, using the Personal Agent Protocol's browser handoff**
+(Poppy 1.1 §6). A personal agent that declares itself gets a one-time code from the bank's `browser_session_endpoint`,
+authorises it with its signed Session header, and its browser exchanges the code for a bank cookie tied to that
+Session. The access token never passes through the browser. For a bank, that turns an anonymous browser riding the
+customer's login into a named agent the bank can recognise. The design:
+
+| Step | Rule |
+| --- | --- |
+| Discovery | The bank lists `web.browser_session_endpoint` in `poppy.json`, and does **not** set `web.unscoped`, so browsing never gives the account's full access |
+| Signed-out browsing | Allowed for public pages only (rates, branch finder), recorded against the Session |
+| Signed-in browsing | Only through `poppy:browser-sign-in` with the customer's consent, and only to **read** pages the agent's Valet level could already read through the API. Payment and beneficiary pages refuse an agent Session and point to the API, where the mandate is checked |
+| Detection | Browser traffic with agent signals but no joined Session is treated as an agent that skipped Valet: warned, slowed, then refused, per the bank's fraud policy (the Veridact detection capability above) |
+| Evidence | The joined Session's ID goes in receipts like any other Session ([Poppy extension](poppy-extension.md) §4) |
+
+That closes the gap for agents that follow Poppy. It doesn't stop a browser agent that hides what it is: detection still has to do that, which is why this stays a **Gap** until detection exists.
+
 **Residual risk:** **Gap** until banks offer Valet as the safe alternative and detect the unsafe one.
 
 ## 5. Why J2 can't bind the token to the agent's key
@@ -328,7 +344,7 @@ How a session stays alive: the assistant receives a refresh token and gets new 5
 | G8 | Approval fatigue | All | Fraud-pattern monitoring on approval requests | Bank |
 | G9 | Agent identity is the platform, not the individual agent, on J2 | J2 | Attribute activity to the platform client and make no per-agent claims until a platform assertion or attestation can be verified; CIMD allowlist; Veridact known-assistant entries for platforms and CIMD URLs as Veridact identifiers (Veridact v0.5, proposed) | Valet + Veridact |
 | G10 | POPIA cross-border transfer; SARB Directive 2 of 2024 | All | Counsel's view | Valet + bank |
-| G11 | Browser agents riding web sessions | Outside Valet | Veridact detection on web channels | Veridact + bank |
+| G11 | Browser agents riding web sessions | Outside Valet | Poppy browser handoff for agents that declare themselves (§4.14, proposed); Veridact detection on web channels for those that don't | Veridact + bank |
 | G12 | Claude Code arrives as a public CIMD client | J2 | Refuse, or hold to view only | Bank |
 | G13 | The PoC's "bank" is a fictional core in the same database, and reconciliation runs on request | All | A real payments adapter, idempotent on the intent id, with scheduled reconciliation and a rule for late arrivals: the main deliverable of the first bank POC | Bank + Valet |
 | G14 | FAPI 2.0 conformance not run. Refresh rotation differs from the profile by choice; the demo's RS256 tokens differ by configuration | J1 | Technical design §4.1, §14.1 | Valet + bank |

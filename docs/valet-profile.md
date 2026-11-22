@@ -32,6 +32,17 @@ Levels are named templates over the types. The agent may ask for a level. The cu
 | **Approved payer** | `approved_payer` | `valet_accounts` + `valet_payments` | Prepare payments to the mandate's payees. **The customer approves every payment in the bank app.** Pilot default for anything that moves money | Pay without the customer's approval, add beneficiaries, change limits | Built |
 | **Bill payer** | `bill_payer` | `valet_accounts` + `valet_payments` | Pay the mandate's payees within the limits without asking each time | Pay anyone outside the mandate without asking, add beneficiaries, change limits | Built |
 
+**Risk hints.** Each level and action carries the Personal Agent Protocol's scope hints (Poppy 1.1 §4.7): `changes`
+says whether it changes anything, and whether that can be undone (`none`, `reversible`, `irreversible`; anything
+unknown counts as `irreversible`), and `personal_data` says whether it reveals personal data. The bank publishes them
+in `/.well-known/poppy.json` ([Poppy extension](poppy-extension.md) §2), and consent screens can use them to say
+plainly what a level allows (`valet/bank/poppy.py`, built).
+
+| Level or action | `changes` | `personal_data` |
+| --- | --- | --- |
+| `view_only`, `read_balances`, `read_transactions` | `none` | `true` |
+| `approved_payer`, `bill_payer`, `pay_existing_beneficiary` | `irreversible` | `true` |
+
 ## 3. Approval rules
 
 These are the named constraints on a `valet_payments` mandate. The customer sets each one on the consent screen. Each one is stored in the mandate, written into the consent wording (whose hash is kept as consent evidence), and applied on every call.

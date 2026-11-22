@@ -8,7 +8,7 @@ import os
 from ..decision import api as decision_api
 from ..decision.client import from_env as decisions_from_env
 from ..decision.service import DecisionService
-from . import api, authz, consents, grants, handoff, mcp, openbanking, web
+from . import api, authz, consents, grants, handoff, mcp, openbanking, poppy, web
 from .config import BankConfig
 from .context import Bank, OAuthError
 from .registry import DEFAULT_TRUST, write_trust_file
@@ -56,6 +56,8 @@ def create_app(cfg: BankConfig | None = None, bank: Bank | None = None) -> FastA
         bank.decisions = decisions_from_env(bank.decision_service)
     app.include_router(decision_api.router(bank.decision_service, os.environ.get("VALET_DECISION_SECRET", "")))
     app.include_router(mcp.router(bank))
+    app.include_router(poppy.router(bank))
+    poppy.install(app, bank)
     return app
 
 

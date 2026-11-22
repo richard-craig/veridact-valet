@@ -74,6 +74,7 @@ class ValetClient:
                  public_bank_url: str | None = None, http: httpx.AsyncClient | None = None,
                  connect_via: ConnectServer | None = None):
         self.client_id, self.key = client_id, key
+        self.extra_headers = None            # optional callable(method, url, token) -> dict of extra request headers
         self.connect_via = connect_via        # None: Valet's authorisation server (federated mode)
         self.bank_url = bank_url.rstrip("/")                  # where this agent's server reaches the bank
         self.public_bank_url = (public_bank_url or bank_url).rstrip("/")   # where the customer's browser reaches it
@@ -185,6 +186,8 @@ class ValetClient:
         headers = {"Authorization": f"DPoP {tok}", "DPoP": make_proof(self.key, method, url, access_token=tok)}
         if method.upper() == "POST":
             headers["Idempotency-Key"] = idempotency_key or new_idempotency_key()
+        if self.extra_headers:
+            headers.update(self.extra_headers(method, url, tok))   # e.g. a Poppy-Session header (valet/common/poppy.py)
         r = await self.http.request(method, url, json=json_body, headers=headers)
         body = r.json()
         if r.status_code >= 400:
