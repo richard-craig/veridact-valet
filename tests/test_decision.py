@@ -275,3 +275,40 @@ def test_in_process_client_turns_surprises_into_fail_closed():
             raise RuntimeError("database gone")
     with pytest.raises(DecisionUnavailable):
         asyncio.run(InProcessDecisions(Broken()).evaluate({}))       # type: ignore[arg-type]
+
+
+def test_the_dpop_tier_needs_a_live_proof_and_then_pays_within_a_standing_mandate(world):
+    """A key-bound agent on Bill payer pays a named payee within its limits without asking; a bound token without a
+    proof, or with another key's proof, is refused, and a stolen bound token sent as Bearer is refused too."""
+    from valet.common.crypto import Key
+    from valet.common.dpop import make_proof
+
+    async def t():
+        w = world
+        bank = w.h.bank
+        key, other = Key.generate(), Key.generate()
+        now = int(time.time())
+        token = w.idp.sign({"iss": w.idp.issuer, "aud": bank.cfg.issuer + "/mcp", "azp": "claude", "sub": "u-1",
+                            "iat": now, "exp": now + 300, "valet_grant": w.grant["id"], "cnf": {"jkt": key.thumbprint}},
+                           typ="at+jwt")
+        url = bank.cfg.issuer + "/mcp"
+
+        async def call(scheme: str, signer, method="tools/call", params=None):
+            headers = {"Authorization": f"{scheme} {token}"}
+            if signer is not None:
+                headers["DPoP"] = make_proof(signer, "POST", url, access_token=token)
+            return await w.h.browser.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}})
+
+        assert (await call("Bearer", None, "tools/list")).status_code == 401        # stolen bound token as Bearer
+        assert (await call("DPoP", None, "tools/list")).status_code == 401          # no proof
+        assert (await call("DPoP", other, "tools/list")).status_code == 401         # another key's proof
+        pay = {"name": "pay_existing_payee", "arguments": {"payee_id": "ben_water", "from_account_id": "acc_4821",
+                                                           "amount": "100.00", "reason": "Water",
+                                                           "idempotency_key": "dpop-water-01"}}
+        r = (await call("DPoP", key, params=pay)).json()["result"]["structuredContent"]
+        assert r["outcome"] == "APPROVED" and r["status"] == "paid" and r["receipt"]
+        assert bank.store.one("SELECT balance FROM accounts WHERE id='acc_4821'")["balance"] == 18_430_55 - 100_00
+        paid = [x for x in bank.receipts.for_grant(w.grant["id"]) if x["action"] == "payment"]
+        assert paid and paid[0]["intent_evidence"] in ("standing_mandate", "agent_reported")
+    run(t())

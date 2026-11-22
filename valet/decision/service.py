@@ -449,7 +449,7 @@ class DecisionService:
                 "approval": intent["approval"], "bank_payment_id": intent["bank_payment_id"],
                 # inside the bank's boundary: what its payment system needs to execute the instruction
                 "customer": self.store.one("SELECT customer FROM grants WHERE id=?", intent["grant_id"])["customer"],
-                "agent": intent["client_id"]}
+                "agent": intent["client_id"], "mandate": intent["grant_id"]}
         if intent["status"] in ("failed", "cancelled"):
             view["release_reason"] = "cancelled" if intent["status"] == "cancelled" else (intent["reason"] or "declined")
         if intent["status"] == "cancelling":

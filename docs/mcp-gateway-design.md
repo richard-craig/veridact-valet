@@ -1,6 +1,6 @@
 # Veridact Valet: MCP Gateway & AI Assistant Connectors – Design
 
-Draft v0.5 · 22 November 2026 · Pilot built: `valet/bank/mcp.py` is a **reference example** of a bank MCP server, built against Keycloak (see the README). PingFederate, ChatGPT, Copilot and Gemini remain design. v0.4 added the two-lane model and Veridact known-assistant entries. v0.5 makes Valet and Veridact **sidecars**: the bank owns the MCP server, and Valet is the decision service it asks ([Decision service](decision-service.md)).
+Draft v0.6 · 22 November 2026 · Pilot built: `valet/bank/mcp.py` is a **reference example** of a bank MCP server, built against Keycloak (see the README). PingFederate, ChatGPT, Copilot and Gemini remain design. v0.4 added the two-lane model and Veridact known-assistant entries. v0.5 makes Valet and Veridact **sidecars**: the bank owns the MCP server, and Valet is the decision service it asks ([Decision service](decision-service.md)). **v0.6 builds that:** the MCP server asks the decision service before every call (over HTTP in the demo stack), checks Claude's Veridact known-assistant entry and status list itself, and Keycloak's tokens carry an RFC 8693 `act` claim.
 
 ## Summary
 

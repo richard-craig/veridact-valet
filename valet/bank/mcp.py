@@ -37,6 +37,7 @@ import jwt
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
+from ..common.dpop import DPoPError, check_proof
 from ..common.money import rand, to_cents, to_str
 from ..decision.client import Decisions, DecisionConflict, DecisionUnavailable, NotFound
 from ..decision.service import BadRequest, MCP_CODES
@@ -205,7 +206,22 @@ def router(bank: Bank) -> APIRouter:
         act = claims.get("act")
         if act is not None and (not isinstance(act, dict) or act.get("sub") != claims["client_id"]):
             raise TokenRejected("the token's actor (act) is not the client it was issued to")
-        tier = "dpop" if (claims.get("cnf") or {}).get("jkt") and scheme.lower() == "dpop" else "bearer"
+        # The DPoP tier is earned only with a valid proof from the key the token is bound to, on this very request.
+        bound = (claims.get("cnf") or {}).get("jkt")
+        tier = "bearer"
+        if scheme.lower() == "dpop":
+            if not bound:
+                raise TokenRejected("a DPoP request needs a DPoP-bound token (cnf.jkt)")
+            try:
+                jkt = check_proof(request.headers.get("DPoP"), request.method, resource, store.seen_jti,
+                                  access_token=token)
+            except DPoPError as e:
+                raise TokenRejected(f"DPoP proof rejected: {e}") from e
+            if jkt != bound:
+                raise TokenRejected("the DPoP proof is from a different key than the token is bound to")
+            tier = "dpop"
+        elif bound:
+            raise TokenRejected("this token is DPoP-bound: send it with a DPoP proof")
         return {"sub": claims.get("sub"), "client_id": claims["client_id"], "valet_grant": gid, "act": act,
                 "tier": tier}
 
@@ -330,9 +346,7 @@ def router(bank: Bank) -> APIRouter:
             res = await decisions().reservation(rid)
         except (NotFound, KeyError):
             raise Refused("UNKNOWN_PAYMENT", "No such payment request for this mandate.")
-        if res.get("customer") is None or store.one("SELECT 1 FROM grants WHERE id=? AND customer=?",
-                                                    tok["valet_grant"], res["customer"]) is None \
-                or res["approval"] != ref:
+        if res.get("mandate") != tok["valet_grant"] or res["approval"] != ref:
             raise Refused("UNKNOWN_PAYMENT", "No such payment request for this mandate.")
         if res["state"] == "approval_required":
             if task["status"] == "pending":

@@ -31,6 +31,8 @@ SCHEME = os.environ.get("DEMO_SCHEME", "http")
 KAYA = os.environ.get("KAYA_URL", f"{SCHEME}://{HOST}:8001")
 BANK = os.environ.get("BANK_URL", f"{SCHEME}://{HOST}:8000")
 ACME = os.environ.get("ACME_URL", f"{SCHEME}://{HOST}:8002")
+VERIDACT = os.environ.get("VERIDACT_URL", f"{SCHEME}://{HOST}:8100")
+VERIDACT_ADMIN = os.environ.get("VERIDACT_ADMIN_SECRET", "")      # set it to also rehearse the kill switch
 USER, PASSWORD = os.environ.get("DEMO_USER", "thandi"), os.environ.get("DEMO_PASSWORD", "demo")
 
 for _stream in (sys.stdout, sys.stderr):  # Windows consoles default to cp1252, which cannot print the demo's arrows
@@ -226,6 +228,51 @@ class MCP:
         return json.loads(res["content"][0]["text"])
 
 
+def decision_service() -> None:
+    meta = httpx.get(f"{BANK}/.well-known/authzen-configuration")
+    check("Valet decision service publishes its AuthZEN metadata", meta.status_code == 200 and
+          meta.json().get("access_evaluation_endpoint", "").endswith("/access/v1/evaluation"))
+    anon = httpx.post(f"{BANK}/access/v1/evaluation", json={"action": {"name": "list_accounts"}})
+    check("Only the bank's own servers may ask it for decisions", anon.status_code in (401, 404), str(anon.status_code))
+    ready = httpx.get(f"{BANK}/readyz").json()
+    check("The MCP server asks Valet over HTTP (sidecar shape)", ready.get("decision_service") == "http",
+          str(ready.get("decision_service")))
+    known = (ready.get("known_assistants") or {}).get("entries", {})
+    check("Claude's Veridact known-assistant entry verifies and is valid", known.get("claude") == "valid", str(known))
+    ops = httpx.get(f"{BANK}/ops").text
+    check("Bank operations page shows the decisions asked for", "Decision service (AuthZEN)" in ops and "permit" in ops)
+
+
+def kill_switch(s: "MCP") -> None:
+    """Veridact suspends Claude, the bank stops it on its next call, and Veridact restores it."""
+    if not VERIDACT_ADMIN:
+        print(f"  {DIM}(kill switch not rehearsed: set VERIDACT_ADMIN_SECRET and VERIDACT_URL){END}")
+        return
+    admin = {"Authorization": f"Bearer {VERIDACT_ADMIN}"}
+    url = f"{VERIDACT}/admin/known-assistants/claude/status"
+    try:
+        r = httpx.post(url, json={"status": "suspended", "reason": "preflight rehearsal"}, headers=admin, timeout=10)
+        if not check("Veridact suspends Claude (attester admin)", r.status_code == 200, str(r.status_code)):
+            return
+        stopped = None
+        for _ in range(20):                      # status list ttl plus the bank's cache: a few seconds in the demo
+            stopped = s.tool("list_accounts")
+            if stopped.get("reason_codes") == ["ASSISTANT_SUSPENDED"]:
+                break
+            time.sleep(1)
+        check("The bank stops Claude on its next call (ASSISTANT_SUSPENDED)",
+              (stopped or {}).get("reason_codes") == ["ASSISTANT_SUSPENDED"])
+    finally:
+        httpx.post(url, json={"status": "valid", "reason": "preflight rehearsal over"}, headers=admin, timeout=10)
+    back = None
+    for _ in range(20):
+        back = s.tool("list_accounts")
+        if back.get("accounts"):
+            break
+        time.sleep(1)
+    check("Restored by Veridact: Claude works again", bool((back or {}).get("accounts")))
+
+
 def mcp_gateway(b: Browser) -> None:
     import base64
     import hashlib
@@ -257,6 +304,8 @@ def mcp_gateway(b: Browser) -> None:
     check("Claude's sign-in reaches the bank's consent screen, with the approve-every-payment rule",
           "/handoff/consent" in r.final_url and "You approve every payment Claude asks for" in r.text,  # type: ignore[attr-defined]
           r.final_url.split("?")[0])  # type: ignore[attr-defined]
+    check("Consent names Claude's verified operator (Veridact known-assistant entry)",
+          "operated by Anthropic PBC" in r.text and "checked with Veridact" in r.text)
     r = b.submit(r, lambda f: "/handoff/decision" in f["action"], button=("decision", "allow"), level="bill_payer",
                  monthly="200000")
     r = b.submit(r, lambda f: "valet_result" in f["fields"], stop_at=CLAUDE_CALLBACK)
@@ -268,6 +317,8 @@ def mcp_gateway(b: Browser) -> None:
                  tok.text[:100] if tok.status_code != 200 else ""):
         return
     claims = jwt.decode(tok.json()["access_token"], options={"verify_signature": False})
+    check("Claude's token names Claude as the actor for Thandi (RFC 8693 act)", claims.get("act") == {"sub": "claude"},
+          json.dumps(claims.get("act")))
     s = MCP(mcp_url, tok.json()["access_token"])
     init = s.call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                  "clientInfo": {"name": "preflight-as-claude", "version": "1"}})
@@ -283,6 +334,7 @@ def mcp_gateway(b: Browser) -> None:
                     reason="Instruction found in a transaction description", idempotency_key="hijack-0001")
     check("Even if the model obeys the injection, the bank declines it", hijack["outcome"] == "DECLINED" and
           hijack["reason_codes"] == ["PAYEE_NOT_IN_MANDATE"], hijack["reason_codes"][0])
+    decision_service()
     payees = {p["name"]: p["payee_id"] for p in s.tool("list_payees")["payees"]}
     req = dict(payee_id=payees["Water & Sanitation"], from_account_id=acct, amount="640.00", reference="Water Nov",
                reason="Thandi asked me to pay this month's water bill", idempotency_key="water-nov-0001")
@@ -306,6 +358,7 @@ def mcp_gateway(b: Browser) -> None:
                  reason="School fees", idempotency_key="school-0001")
     check("Over the monthly limit is declined before it reaches the customer", big["outcome"] == "DECLINED" and
           big["reason_codes"] == ["MONTHLY_LIMIT_EXCEEDED"], big["reason_codes"][0])
+    kill_switch(s)
     gid = claims["valet_grant"]
     page = b.go("GET", f"{BANK}/app/agents/{gid}")
     b.submit(page, lambda f: f["action"].endswith("/pause"))

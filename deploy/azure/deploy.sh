@@ -155,6 +155,7 @@ Veridact Valet demo
 
 Check it from your laptop (repository checkout, Python 3.11+):
   BANK_URL=https://$BANK_HOST KAYA_URL=https://$KAYA_HOST ACME_URL=https://$ACME_HOST \\
+  VERIDACT_URL=https://$VERIDACT_HOST VERIDACT_ADMIN_SECRET=... \\
   DEMO_PASSWORD=... CLAUDE_CLIENT_SECRET=... python scripts/preflight.py
 
 On the VM:  ssh azureuser@$IP   then   sudo /opt/valet/valet.sh status|logs|reset|update
