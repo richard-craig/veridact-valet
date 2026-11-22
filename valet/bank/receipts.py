@@ -21,6 +21,7 @@ from typing import Any
 import jwt
 
 from ..common.crypto import Key, digest, verify
+from ..common.poppy import current_session
 from .config import SAST
 from .store import Store
 
@@ -51,6 +52,8 @@ class Receipts:
             purpose = next((d.get("intent") for d in json.loads(g["details"]) if d.get("intent")), None) if g else None
             if purpose and "intent" not in fields:
                 fields["intent"] = purpose
+        if "session" not in fields and (session := current_session.get()):
+            fields["session"] = session            # the agent's Poppy Session: evidence of continuity, never access
         if self.policy is not None and "policy" not in fields:
             fields["policy"] = self.policy.ref       # the bank's rules in force, besides the customer's mandate
         personal = {k: str(fields.pop(k)) for k in PERSONAL_FIELDS if fields.get(k)}
