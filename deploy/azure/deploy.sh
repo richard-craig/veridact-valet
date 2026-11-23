@@ -31,7 +31,7 @@ REPO="${REPO:-https://github.com/veridactlabs/veridact-valet.git}"
 BRANCH="${BRANCH:-main}"
 AUTO_SHUTDOWN_UTC="${AUTO_SHUTDOWN_UTC:-}"    # e.g. 1900 = 21:00 SAST; empty = none
 KEY_VAULT="${KEY_VAULT:-}"                    # 1 = keys and secrets in Azure Key Vault (see above)
-SECRET_NAMES="KC_ADMIN_PASSWORD DEMO_PASSWORD CLAUDE_CLIENT_SECRET BANK_CLIENT_SECRET BANK_SESSION_SECRET VALET_HANDOFF_SECRET VALET_INTERNAL_SECRET VALET_DECISION_SECRET VERIDACT_ADMIN_SECRET"
+SECRET_NAMES="KC_ADMIN_PASSWORD DEMO_PASSWORD CLAUDE_CLIENT_SECRET BANK_CLIENT_SECRET BANK_SESSION_SECRET VALET_HANDOFF_SECRET VALET_INTERNAL_SECRET VALET_DECISION_SECRET VERIDACT_ADMIN_SECRET CHATGPT_CLIENT_SECRET"
 kvname() { echo "$1" | tr 'A-Z_' 'a-z-'; }    # BANK_SESSION_SECRET -> bank-session-secret
 
 sfx="${LABEL:+.$LABEL}"
@@ -109,10 +109,10 @@ VALET_INTERNAL_SECRET=$VALET_INTERNAL_SECRET
 EOF
   echo "    saved to $SECRETS_FILE (keep it; re-runs reuse it)"
 fi
-# Added later (decision service, Veridact attester): generated once, also for a secrets file from an earlier run.
+# Added later (decision service, Veridact attester, ChatGPT client): generated once, also for a secrets file from an earlier run.
 # With KEY_VAULT they are in SECRET_NAMES, so the vault creates them and the VM reads them from there.
 if [ -z "$KEY_VAULT" ]; then
-  for v in VALET_DECISION_SECRET VERIDACT_ADMIN_SECRET; do
+  for v in VALET_DECISION_SECRET VERIDACT_ADMIN_SECRET CHATGPT_CLIENT_SECRET; do
     if [ -z "${!v:-}" ]; then val=$(secret); printf -v "$v" '%s' "$val"; (umask 077; echo "$v=$val" >> "$SECRETS_FILE"); fi
   done
 fi
@@ -208,8 +208,9 @@ Veridact Valet demo
   Acme Budgeting (third-party app)           https://$ACME_HOST
   Keycloak admin (from $ADMIN_CIDR only)     https://$IDP_HOST/admin   admin / \$KC_ADMIN_PASSWORD
   Claude connector URL                       https://$BANK_HOST/mcp    client id: claude   secret: \$CLAUDE_CLIENT_SECRET
+  ChatGPT connector URL                      https://$BANK_HOST/mcp    client id: chatgpt  secret: \$CHATGPT_CLIENT_SECRET
   Bank operations (decisions, kill switch)   https://$BANK_HOST/ops
-  Veridact attester (suspend Claude)         https://$VERIDACT_HOST/admin   secret: \$VERIDACT_ADMIN_SECRET
+  Veridact attester (suspend assistants)     https://$VERIDACT_HOST/admin   secret: \$VERIDACT_ADMIN_SECRET
   Secrets                                    ${KEY_VAULT:+Key Vault $KV_NAME (az keyvault secret show --vault-name $KV_NAME -n demo-password)}${KEY_VAULT:-$SECRETS_FILE}
   Key custody                                https://$BANK_HOST/readyz  ("keys")
 

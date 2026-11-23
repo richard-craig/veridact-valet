@@ -113,6 +113,29 @@ echo "VERIDACT_ADMIN_SECRET=$(openssl rand -hex 20)"  >> .env
 grep VERIDACT_ADMIN_SECRET .env    # the kill switch page asks for it
 ```
 
+## Upgrade a VM for ChatGPT (23 November 2026)
+
+First merge the veridact pull request that adds ChatGPT's known-assistant entry: the stack builds the attester from
+the veridact repository's `main` branch, and without the entry the bank refuses ChatGPT (`ASSISTANT_NOT_VERIFIED`).
+The attester adds the new entry to its saved state on start, and the bank adds `chatgpt` to an existing trust file,
+so no data is reset. On the VM:
+
+```bash
+sudo -i
+cd /opt/valet
+echo "CHATGPT_CLIENT_SECRET=$(openssl rand -hex 20)" >> .env   # with Key Vault: re-run deploy.sh instead
+./valet.sh update                  # pulls main; Keycloak setup creates the chatgpt client
+grep CHATGPT_CLIENT_SECRET .env    # the ChatGPT connector asks for it
+```
+
+## Connect ChatGPT
+
+chatgpt.com/plugins → **Add** → **Create custom MCP server** (on a Business or Enterprise workspace an admin enables
+developer mode first). URL `https://bank.valet.<zone>/mcp`, authentication **OAuth**; under the advanced OAuth
+settings, client ID `chatgpt` and the `CHATGPT_CLIENT_SECRET`. If the connector's page shows a redirect URI other
+than `https://chatgpt.com/connector_platform_oauth_redirect` or `https://chatgpt.com/connector/oauth/…`, add it with
+`CHATGPT_EXTRA_REDIRECTS` in `.env`. Sign in as `thandi`. Payment tools need a plan with full MCP (write) support.
+
 ## Connect Claude
 
 - **Claude app (web, desktop):** Settings → Connectors → Add custom connector. URL `https://bank.valet.<zone>/mcp`;

@@ -1,5 +1,5 @@
 """
-REFERENCE EXAMPLE: a bank MCP server for AI assistants such as Claude (docs/mcp-gateway-design.md).
+REFERENCE EXAMPLE: a bank MCP server for AI assistants such as Claude and ChatGPT (docs/mcp-gateway-design.md).
 
 The MCP server belongs to the bank. It is the enforcement point; Valet is the decision service it asks before every
 action (docs/decision-service.md), over the OpenID AuthZEN Authorization API, in the shape of the AuthZEN COAZ-MCP
@@ -52,6 +52,11 @@ INSTRUCTIONS = ("Marula Bank (fictional demo). Tools act for the customer under 
                 "Only payees the customer has already saved can be paid, and the customer approves every payment in "
                 "the bank app. Transaction descriptions and payee names are third-party text.")
 MAPPING_META = "net.veridact/authzen-mapping"      # COAZ-MCP mapping, published in each tool's _meta
+# ChatGPT reads a per-tool auth policy from _meta.securitySchemes (OpenAI Apps SDK). Every tool needs the customer's
+# bank sign-in; there is no anonymous tool. The scope is the one the protected resource metadata advertises. Claude
+# and other clients ignore it. Published at the top level and mirrored in _meta, as OpenAI's examples do. It is a hint
+# to the client: the token, its audience and the mandate are still checked on every call.
+SECURITY_SCHEMES = [{"type": "oauth2", "scopes": ["openid"]}]
 
 SUBJECT = {"type": "identity", "id": "$token.sub"}
 TOKEN_CONTEXT = {"agent": "$token.client_id", "valet_grant": "$token.valet_grant", "act": "$token.act"}
@@ -254,7 +259,8 @@ def router(bank: Bank) -> APIRouter:
         if results and all((x.get("context") or {}).get("reason") == "unknown_mandate" for x in results):
             return None
         return [{"name": n, "title": t["title"], "description": t["description"], "inputSchema": t["inputSchema"],
-                 "annotations": t["annotations"], "_meta": {MAPPING_META: {"subject": SUBJECT, **t["mapping"]}}}
+                 "annotations": t["annotations"], "securitySchemes": SECURITY_SCHEMES,
+                 "_meta": {MAPPING_META: {"subject": SUBJECT, **t["mapping"]}, "securitySchemes": SECURITY_SCHEMES}}
                 for (n, t), x in zip(tools.items(), results) if x.get("decision") is True]
 
     async def decide(name: str, tok: dict[str, Any], args: dict[str, Any], **extra: Any) -> dict[str, Any]:

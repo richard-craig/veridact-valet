@@ -1,6 +1,6 @@
 # Veridact Valet: MCP Gateway & AI Assistant Connectors – Design
 
-Draft v0.6 · 22 November 2026 · Pilot built: `valet/bank/mcp.py` is a **reference example** of a bank MCP server, built against Keycloak (see the README). PingFederate, ChatGPT, Copilot and Gemini remain design. v0.4 added the two-lane model and Veridact known-assistant entries. v0.5 makes Valet and Veridact **sidecars**: the bank owns the MCP server, and Valet is the decision service it asks ([Decision service](decision-service.md)). **v0.6 builds that:** the MCP server asks the decision service before every call (over HTTP in the demo stack), checks Claude's Veridact known-assistant entry and status list itself, and Keycloak's tokens carry an RFC 8693 `act` claim.
+Draft v0.7 · 23 November 2026 · Pilot built: `valet/bank/mcp.py` is a **reference example** of a bank MCP server, built against Keycloak (see the README), for Claude and (v0.7) ChatGPT. PingFederate, Copilot and Gemini remain design. v0.4 added the two-lane model and Veridact known-assistant entries. v0.5 makes Valet and Veridact **sidecars**: the bank owns the MCP server, and Valet is the decision service it asks ([Decision service](decision-service.md)). **v0.6 builds that:** the MCP server asks the decision service before every call (over HTTP in the demo stack), checks Claude's Veridact known-assistant entry and status list itself, and Keycloak's tokens carry an RFC 8693 `act` claim.
 
 ## Summary
 
@@ -307,7 +307,7 @@ Claude uses the same connector infrastructure across Claude.ai, Desktop, mobile 
 
 ## Connector build: ChatGPT
 
-ChatGPT connects through the Apps SDK on the same MCP auth spec, so the gateway needs no ChatGPT-specific code, only a client registration and tool metadata. Source: [Apps SDK authentication](https://developers.openai.com/apps-sdk/build/auth).
+**Built in v0.7** against Keycloak: client `chatgpt`, Veridact known-assistant entry `chatgpt`, `securitySchemes` on every tool, and ChatGPT's pre-link checks in `scripts/preflight.py`. ChatGPT connects through the Apps SDK on the same MCP auth spec, so the gateway needs no ChatGPT-specific code, only a client registration and tool metadata. Source: [Plugins authentication](https://developers.openai.com/plugins/build/auth), read 23 November 2026.
 
 - **Transport and discovery.** Same gateway URL and protected resource metadata as Claude.
 - **Resource parameter.** ChatGPT sends the gateway's canonical HTTPS identifier as `resource` during OAuth; PingFederate must echo it and bind the token's audience to it.
@@ -315,8 +315,12 @@ ChatGPT connects through the Apps SDK on the same MCP auth spec, so the gateway 
 - **Token endpoint auth methods.** Publish only the methods the bank accepts (client secret for the predefined client).
 - **Per-tool security.** Declare `securitySchemes` on each tool so ChatGPT knows which scopes each needs and can prompt for re-linking.
 - **Token use.** ChatGPT exchanges the code for a token and sends it as `Authorization: Bearer` on each MCP request.
-- **Redirect URI.** Allowlist ChatGPT's current callback in the PingFederate client.
-- **Testing then review.** Build and test in ChatGPT developer mode, then submit for the app directory.
+- **Issuer identification (RFC 9207).** ChatGPT rejects an authorization response whose `iss` is missing or differs from the metadata `issuer`, when the server advertises `authorization_response_iss_parameter_supported`. The `issuer` must also equal the `authorization_servers` entry in the protected resource metadata, compared exactly. Keycloak meets this; check PingFederate's version before the pilot.
+- **Redirect URI.** With RFC 9207 met, ChatGPT uses the stable `https://chatgpt.com/connector_platform_oauth_redirect`; otherwise a callback-id form, `https://chatgpt.com/connector/oauth/{callback_id}`. Allowlist the one the connector's management page shows (the demo allows both).
+- **Not supported by ChatGPT.** Client credentials, service accounts and JWT bearer assertions: the customer always signs in.
+- **Plans.** Custom MCP servers are added at chatgpt.com/plugins (OpenAI dropped the separate developer-mode switch for eligible users in 2026). Write tools need full MCP support, documented for Business, Enterprise and Edu; plan the demo on such a workspace, or use the read-only profile.
+- **mTLS (optional).** ChatGPT can present an OpenAI-managed client certificate (SAN `mtls.prod.connectors.openai.com`) that proves the caller is ChatGPT. A bank can require it at its edge as defence in depth, in place of chasing egress ranges; it does not authenticate the customer.
+- **Testing then review.** Build and test as a custom MCP server, then submit for the app directory.
 
 **Gap to note:** ChatGPT's browser-driving Agent Mode does not use custom apps, so the gateway only serves ChatGPT's connector path. Agents that drive the bank website still need detecting (see Veridact in the architecture).
 
@@ -354,7 +358,7 @@ All five target surfaces work with the same gateway; only client registration an
 | Surface | Customer segment | Transport | Client registration Valet uses | DPoP today | Phase |
 | --- | --- | --- | --- | --- | --- |
 | Claude (web, desktop, mobile, Code) | Retail | Streamable HTTP | Pre-registered confidential client; Anthropic-held for directory | No | 1 |
-| ChatGPT (apps) | Retail | Streamable HTTP | Predefined confidential client | No | 1 |
+| ChatGPT (apps) | Retail | Streamable HTTP | Predefined confidential client (built) | No | 1 |
 | Copilot Studio / M365 declarative agents | Business, SME | Streamable HTTP | Manual OAuth, confidential client per tenant | No | 2 |
 | Gemini Enterprise | Business, SME | Streamable HTTP | Client ID and secret | No | 2 |
 | Gemini consumer app | Retail | Streamable HTTP | To confirm | No | Watch |

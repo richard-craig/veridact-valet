@@ -209,6 +209,8 @@ def consent_service(b: Browser) -> None:
 
 CLAUDE_CALLBACK = "http://localhost:33418/callback"     # what Claude Code uses; claude.ai uses its own HTTPS callback
 CLAUDE_SECRET = os.environ.get("CLAUDE_CLIENT_SECRET", "claude-demo-secret-change-me")
+CHATGPT_CALLBACK = "https://chatgpt.com/connector_platform_oauth_redirect"   # stable callback (server meets RFC 9207)
+CHATGPT_SECRET = os.environ.get("CHATGPT_CLIENT_SECRET", "chatgpt-demo-secret-change-me")
 
 
 class MCP:
@@ -239,6 +241,9 @@ def decision_service() -> None:
           str(ready.get("decision_service")))
     known = (ready.get("known_assistants") or {}).get("entries", {})
     check("Claude's Veridact known-assistant entry verifies and is valid", known.get("claude") == "valid", str(known))
+    if "chatgpt" in known:
+        check("ChatGPT's Veridact known-assistant entry verifies and is valid", known.get("chatgpt") == "valid",
+              str(known))
     ops = httpx.get(f"{BANK}/ops").text
     check("Bank operations page shows the decisions asked for", "Decision service (AuthZEN)" in ops and "permit" in ops)
 
@@ -398,6 +403,62 @@ def mcp_gateway(b: Browser) -> None:
         pass
 
 
+def chatgpt_connector(b: Browser) -> None:
+    """What ChatGPT checks before it links (https://developers.openai.com/plugins/build/auth), then the link itself:
+    predefined confidential client, PKCE S256, resource echoed into the audience, iss in the authorization response."""
+    import base64
+    import hashlib
+    import secrets
+    mcp_url = BANK + "/mcp"
+    prm = httpx.get(BANK + "/.well-known/oauth-protected-resource/mcp").json()
+    issuer = prm["authorization_servers"][0]
+    origin, path = re.match(r"(https?://[^/]+)(.*)", issuer).groups()
+    meta = httpx.get(f"{issuer}/.well-known/openid-configuration").json()
+    check("ChatGPT: protected resource metadata advertises scopes", bool(prm.get("scopes_supported")),
+          str(prm.get("scopes_supported")))
+    check("ChatGPT: authorisation server supports PKCE S256", "S256" in meta.get("code_challenge_methods_supported", []))
+    check("ChatGPT: issuer matches the resource metadata exactly, and iss is returned (RFC 9207)",
+          meta.get("issuer") == issuer and meta.get("authorization_response_iss_parameter_supported") is True,
+          f"{meta.get('issuer')} vs {issuer}")
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    q = {"response_type": "code", "client_id": "chatgpt", "redirect_uri": CHATGPT_CALLBACK,
+         "scope": "openid email profile offline_access", "state": "st-gpt", "code_challenge": challenge,
+         "code_challenge_method": "S256", "resource": mcp_url}
+    r = b.keycloak_login_if_asked(b.go("GET", meta["authorization_endpoint"] + "?" + str(httpx.QueryParams(q)),
+                                       stop_at=CHATGPT_CALLBACK))
+    if not check("ChatGPT's sign-in reaches the bank's consent screen", "/handoff/consent" in r.final_url,  # type: ignore[attr-defined]
+                 r.final_url.split("?")[0]):  # type: ignore[attr-defined]
+        return
+    if "operated by" in r.text:
+        check("Consent names ChatGPT's verified operator (Veridact known-assistant entry)", "operated by OpenAI" in r.text)
+    r = b.submit(r, lambda f: "/handoff/decision" in f["action"], button=("decision", "allow"), level="view_only")
+    r = b.submit(r, lambda f: "valet_result" in f["fields"], stop_at=CHATGPT_CALLBACK)
+    back = dict(httpx.URL(r.final_url).params)  # type: ignore[attr-defined]
+    check("ChatGPT: the authorisation response carries iss equal to the issuer", back.get("iss") == issuer,
+          str(back.get("iss")))
+    tok = httpx.post(meta["token_endpoint"], data={"grant_type": "authorization_code", "code": back.get("code"),
+                                                   "redirect_uri": CHATGPT_CALLBACK, "code_verifier": verifier,
+                                                   "resource": mcp_url}, auth=("chatgpt", CHATGPT_SECRET))
+    if not check("Keycloak issues ChatGPT a gateway-bound token (confidential client, PKCE)", tok.status_code == 200,
+                 tok.text[:100] if tok.status_code != 200 else ""):
+        return
+    claims = jwt.decode(tok.json()["access_token"], options={"verify_signature": False})
+    aud = claims.get("aud") if isinstance(claims.get("aud"), list) else [claims.get("aud")]
+    check("ChatGPT's token is audience-bound to the gateway and names ChatGPT as the actor",
+          mcp_url in aud and claims.get("act") == {"sub": "chatgpt"}, f"aud {aud}, act {claims.get('act')}")
+    s = MCP(mcp_url, tok.json()["access_token"])
+    s.call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                          "clientInfo": {"name": "preflight-as-chatgpt", "version": "1"}})
+    listed = s.call("tools/list")["tools"]
+    names = [t["name"] for t in listed]
+    check("ChatGPT sees a view-only tool list, each tool declaring its securitySchemes",
+          "pay_existing_payee" not in names and "list_accounts" in names and
+          all(t.get("_meta", {}).get("securitySchemes") for t in listed), ", ".join(names))
+    accounts = s.tool("list_accounts").get("accounts") or []
+    check("ChatGPT reads the account the customer shared", bool(accounts), f"{len(accounts)} account(s)")
+
+
 def main() -> int:
     print(f"Preflight against Kaya {KAYA} · Bank {BANK}\n")
     b = Browser()
@@ -470,6 +531,9 @@ def main() -> int:
 
     # 8. A real AI assistant's connector (Claude) through the bank's MCP gateway
     mcp_gateway(b)
+
+    # 8b. The same gateway as ChatGPT's connector sees it
+    chatgpt_connector(b)
 
     # 9. Receipts
     v = b.go("GET", BANK + "/receipts/verify").json()

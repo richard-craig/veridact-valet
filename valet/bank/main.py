@@ -1,9 +1,11 @@
 """Marula Bank (fictional): authorisation server + API + customer app, in one FastAPI service."""
 from __future__ import annotations
 
-from fastapi import FastAPI, Request
-
+import json
 import os
+from pathlib import Path
+
+from fastapi import FastAPI, Request
 
 from ..decision import api as decision_api
 from ..decision.client import from_env as decisions_from_env
@@ -14,10 +16,23 @@ from .context import Bank, OAuthError
 from .registry import DEFAULT_TRUST, write_trust_file
 
 
+def add_missing_trust(data_dir: Path) -> None:
+    """Write the demo trust file, or add default agents a newer release knows about (e.g. ChatGPT) to an existing one.
+    Entries already in the file are the bank's and are never changed."""
+    path = data_dir / "trust.json"
+    try:
+        current = json.loads(path.read_text()) if path.exists() else None
+    except (OSError, ValueError):
+        return                                     # unreadable: leave it alone; the registry fails closed on it
+    if current is None:
+        write_trust_file(data_dir, DEFAULT_TRUST)
+    elif missing := {k: v for k, v in DEFAULT_TRUST.items() if k not in current}:
+        write_trust_file(data_dir, {**current, **missing})
+
+
 def create_app(cfg: BankConfig | None = None, bank: Bank | None = None) -> FastAPI:
     cfg = cfg or BankConfig()
-    if not (cfg.data_dir / "trust.json").exists():
-        write_trust_file(cfg.data_dir, DEFAULT_TRUST)
+    add_missing_trust(cfg.data_dir)
     bank = bank or Bank(cfg)
     app = FastAPI(title="Marula Bank (Veridact Valet PoC)", docs_url="/docs")
     app.state.bank = bank

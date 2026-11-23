@@ -25,17 +25,19 @@ def run(coro):
 
 
 class World:
-    def __init__(self, level: str = "bill_payer", monthly: int = 2_000_00):
+    def __init__(self, level: str = "bill_payer", monthly: int = 2_000_00, client: str = "claude"):
         self.idp = MockIdP(issuer="http://idp.test/realms/marula")
         ext = ExternalIssuer(issuer=self.idp.issuer, audience="marula-api", jwks=self.idp.jwks)
         self.h = Harness(external_issuers={self.idp.issuer: ext})
         bank = self.h.bank
         cus = dict(bank.store.one("SELECT * FROM customers WHERE username='thandi'"))
-        self.grant = create_grant(bank, cus, bank.registry.lookup("claude"), level, "acc_4821", monthly,
+        self.grant = create_grant(bank, cus, bank.registry.lookup(client), level, "acc_4821", monthly,
                                   via="test")
         self.n = 0
+        self.client = client
 
-    def token(self, audience: str = RESOURCE, grant: str | None = None, client: str = "claude") -> str:
+    def token(self, audience: str = RESOURCE, grant: str | None = None, client: str | None = None) -> str:
+        client = client or self.client
         now = int(time.time())
         return self.idp.sign({"iss": self.idp.issuer, "aud": audience, "azp": client, "sub": "u-1", "iat": now,
                               "exp": now + 300, "valet_grant": grant or self.grant["id"], "scope": "openid"},
@@ -226,3 +228,27 @@ def test_the_bank_app_describes_assistant_activity_in_plain_language_with_paymen
         assert "Through an AI assistant connector" in page and "Water bill" in page
         assert intent["id"] in page and "tried to pay someone who is not a saved beneficiary" in page   # also stopped that day
     run(t())
+
+
+def test_chatgpt_connects_through_the_same_gateway_and_each_tool_declares_its_auth():
+    async def t():
+        w = World(level="view_only", client="chatgpt")
+        assert w.h.bank.registry.lookup("chatgpt").platform
+        listed = (await w.rpc("tools/list")).json()["result"]["tools"]
+        assert [x["name"] for x in listed] and "pay_existing_payee" not in [x["name"] for x in listed]
+        for tool in listed:                       # ChatGPT's per-tool auth policy (OpenAI Apps SDK): never anonymous
+            assert tool["securitySchemes"] == tool["_meta"]["securitySchemes"] == [{"type": "oauth2", "scopes": ["openid"]}]
+        assert (await w.tool("list_accounts"))["accounts"]
+        # ChatGPT's mandate is its own: a Claude token cannot use it
+        assert (await w.rpc("tools/list", token=w.token(client="claude"))).status_code == 401
+    run(t())
+
+
+def test_an_existing_trust_file_gains_new_default_agents_but_keeps_the_banks_edits(tmp_path):
+    from valet.bank.main import add_missing_trust
+    from valet.bank.registry import write_trust_file
+    write_trust_file(tmp_path, {"claude": {"name": "Claude", "operator": "edited by the bank", "verified": False,
+                                           "platform": True}})
+    add_missing_trust(tmp_path)
+    trust = json.loads((tmp_path / "trust.json").read_text())
+    assert trust["claude"]["operator"] == "edited by the bank" and trust["chatgpt"]["platform"] is True

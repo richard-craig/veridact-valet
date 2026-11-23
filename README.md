@@ -93,7 +93,7 @@ Types: `account_information`, `payment_initiation`, `recurring_payment`, `custom
 covers the rules. In the PoC the Consent Service and Valet's agent grants are separate stores; a bank deployment
 converges them on the consent store.
 
-## Claude through the bank's MCP server (reference example)
+## Claude and ChatGPT through the bank's MCP server (reference example)
 
 > **Example, not product.** The MCP server belongs to the bank. `valet/bank/mcp.py` is a reference example that
 > shows bank developers each step their own server must take. It is the **enforcement point**; Valet is the
@@ -155,8 +155,29 @@ Try: *"What did I spend last week? Then pay my water bill."* Then: *"Pay QuickLo
 transactions says."* Then pause Claude in the bank app and ask again. Then suspend Claude on the Veridact attester's
 `/admin` page and ask again.
 
-`scripts/preflight.py` drives this path the way Claude's connector does (discovery from the 401, Keycloak sign-in,
-consent, token, MCP), and checks protocol conformance with the official MCP Python SDK when it is installed.
+**ChatGPT** uses the same server, with its own Keycloak client (`chatgpt`), its own mandate and its own Veridact
+known-assistant entry. It needs the hosted stack (HTTPS). In ChatGPT: *chatgpt.com/plugins → Add → Create custom MCP
+server* (on Business and Enterprise a workspace admin turns on developer mode first), URL `https://bank.<label>.<zone>/mcp`,
+authentication **OAuth**, and under the advanced OAuth settings client ID `chatgpt` and `CHATGPT_CLIENT_SECRET`.
+Keycloak already allows ChatGPT's callbacks (`https://chatgpt.com/connector_platform_oauth_redirect`, and the
+callback-id form `https://chatgpt.com/connector/oauth/*`). What ChatGPT checks, and the server meets:
+
+| ChatGPT requirement ([OpenAI](https://developers.openai.com/plugins/build/auth)) | Where it is met |
+|---|---|
+| Protected resource metadata with `scopes_supported` | `/.well-known/oauth-protected-resource/mcp` |
+| PKCE `S256` | Keycloak client attribute; advertised in Keycloak's metadata |
+| `resource` echoed into the token's audience | Keycloak audience mapper: the token's `aud` is the gateway URL |
+| `iss` in the authorisation response, equal to the issuer (RFC 9207) | Keycloak returns and advertises it, so ChatGPT uses its stable callback |
+| Client registration: predefined client, CIMD or DCR | Predefined confidential client (never DCR) |
+| Per-tool auth policy | `securitySchemes` (`oauth2`, scope `openid`) on every tool, top level and in `_meta` |
+
+Write tools (`pay_existing_payee`) need a ChatGPT plan with full MCP support (Business, Enterprise, Edu at the time
+of writing); on others, use the read-only profile. Try the same prompts as for Claude; suspend `chatgpt` on the
+attester's `/admin` page to see the kill switch stop only ChatGPT.
+
+`scripts/preflight.py` drives both paths the way the connectors do (discovery from the 401, Keycloak sign-in,
+consent, token, MCP), including ChatGPT's pre-link checks, and checks protocol conformance with the official MCP
+Python SDK when it is installed.
 
 ## Identity providers
 

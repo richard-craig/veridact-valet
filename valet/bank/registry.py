@@ -23,7 +23,7 @@ class AgentRecord:
     verified: bool
     jwk: dict[str, Any]
     redirect_uris: list[str] = field(default_factory=list)
-    platform: bool = False        # an AI platform's OAuth client (e.g. Claude) reaching the bank via the MCP gateway
+    platform: bool = False        # an AI platform's OAuth client (e.g. Claude, ChatGPT) reaching the bank via the MCP gateway
 
 
 class RegistryUnavailable(Exception):
@@ -109,4 +109,6 @@ DEFAULT_TRUST = {
     "copycat": {"name": "Kaya", "operator": "Unknown operator", "verified": False},
     "claude": {"name": "Claude", "operator": "Anthropic, through Marula Bank's MCP gateway", "verified": False,
                "platform": True},
+    "chatgpt": {"name": "ChatGPT", "operator": "OpenAI, through Marula Bank's MCP gateway", "verified": False,
+                "platform": True},
 }
