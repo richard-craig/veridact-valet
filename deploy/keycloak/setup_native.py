@@ -11,6 +11,7 @@ Creates (idempotently):
   - flow "valet browser": [sign in (cookie | username+password)] then [Valet AI-agent consent]
   - client "kaya": confidential, private_key_jwt (ES256), DPoP-bound tokens, PAR and PKCE required,
     marked valet.agent=true, using the flow above, with the valet_grant and marula-api audience mappers
+  - clients "claude" and "chatgpt": AI assistant platforms reaching the bank's MCP gateway (bearer tier)
 """
 from __future__ import annotations
 
@@ -55,7 +56,7 @@ def main() -> None:
 
     c = admin()
     # ---- clean slate for re-runs
-    for client_id in ("kaya", "acme-budgeting", "claude"):     # every client bound to the flow, before the flow itself
+    for client_id in ("kaya", "acme-budgeting", "claude", "chatgpt"):     # every client bound to the flow, before the flow itself
         for cl in ok(c.get("/clients", params={"clientId": client_id})).json():
             ok(c.delete(f"/clients/{cl['id']}"))
     for f in ok(c.get("/authentication/flows")).json():
@@ -168,32 +169,56 @@ def setup_consent_app(c: httpx.Client, flow_id: str) -> None:
 
 
 MCP_RESOURCE = os.environ.get("VALET_MCP_RESOURCE", "http://localhost:8000/mcp")
-CLAUDE_SECRET = os.environ.get("CLAUDE_CLIENT_SECRET", "claude-demo-secret-change-me")
-CLAUDE_REDIRECTS = ["https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback",
-                    "http://localhost/*", "http://127.0.0.1/*",
-                    *filter(None, os.environ.get("CLAUDE_EXTRA_REDIRECTS", "").split(","))]
+
+
+def extra(name: str) -> list[str]:
+    return [u for u in os.environ.get(name, "").split(",") if u]
+
+
+# AI assistant platforms, each a pre-registered confidential client the bank issues (never Dynamic Client
+# Registration). Redirect URIs are the platform's published OAuth callbacks.
+PLATFORMS = {
+    "claude": {
+        "name": "Claude (AI assistant, via the MCP gateway)",
+        "secret": os.environ.get("CLAUDE_CLIENT_SECRET", "claude-demo-secret-change-me"),
+        "redirects": ["https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback",
+                      "http://localhost/*", "http://127.0.0.1/*", *extra("CLAUDE_EXTRA_REDIRECTS")],
+        "lifespan": os.environ.get("CLAUDE_TOKEN_LIFESPAN", "300")},
+    # ChatGPT (OpenAI's apps and custom MCP connectors, https://developers.openai.com/plugins/build/auth). Keycloak
+    # returns iss in every authorization response and advertises it (RFC 9207), so ChatGPT uses its stable callback.
+    # The callback-id form is allowed too: ChatGPT falls back to it for servers without RFC 9207, and the connector's
+    # management page shows which one a connection uses.
+    "chatgpt": {
+        "name": "ChatGPT (AI assistant, via the MCP gateway)",
+        "secret": os.environ.get("CHATGPT_CLIENT_SECRET", "chatgpt-demo-secret-change-me"),
+        "redirects": ["https://chatgpt.com/connector_platform_oauth_redirect", "https://chatgpt.com/connector/oauth/*",
+                      *extra("CHATGPT_EXTRA_REDIRECTS")],
+        "lifespan": os.environ.get("CHATGPT_TOKEN_LIFESPAN", "300")},
+}
 
 
 def setup_mcp_client(c: httpx.Client, flow_id: str) -> None:
-    """Claude, connecting through the bank's MCP gateway: a pre-registered confidential client (client secret),
-    authorization code + PKCE, bearer tokens (Claude sends no DPoP yet) audience-bound to the gateway, 5 minutes."""
-    ok(c.post("/clients", json={
-        "clientId": "claude", "name": "Claude (AI assistant, via the MCP gateway)", "protocol": "openid-connect",
-        "enabled": True, "publicClient": False, "clientAuthenticatorType": "client-secret", "secret": CLAUDE_SECRET,
-        "standardFlowEnabled": True, "directAccessGrantsEnabled": False, "implicitFlowEnabled": False,
-        "serviceAccountsEnabled": False, "redirectUris": CLAUDE_REDIRECTS,
-        "authenticationFlowBindingOverrides": {"browser": flow_id},
-        "attributes": {"valet.agent": "true", "pkce.code.challenge.method": "S256",
-                       "access.token.lifespan": os.environ.get("CLAUDE_TOKEN_LIFESPAN", "300"),
-                       "use.refresh.tokens": "true", "client.use.lightweight.access.token.enabled": "false"},
-        "protocolMappers": [
-            {"name": "valet mandate", "protocol": "openid-connect", "protocolMapper": "valet-grant-mapper",
-             "config": {"access.token.claim": "true", "introspection.token.claim": "true", "id.token.claim": "false",
-                        "userinfo.token.claim": "false"}},
-            {"name": "gateway audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
-             "config": {"included.custom.audience": MCP_RESOURCE, "access.token.claim": "true",
-                        "id.token.claim": "false", "introspection.token.claim": "true"}}]}))
-    print(f"  client 'claude': confidential, PKCE, bearer tokens for {MCP_RESOURCE}")
+    """Each assistant platform connecting through the bank's MCP gateway: a pre-registered confidential client
+    (client secret), authorization code + PKCE (S256), bearer tokens (no DPoP from these platforms yet) audience-bound
+    to the gateway, 5 minutes, carrying the Valet mandate id."""
+    for client_id, p in PLATFORMS.items():
+        ok(c.post("/clients", json={
+            "clientId": client_id, "name": p["name"], "protocol": "openid-connect",
+            "enabled": True, "publicClient": False, "clientAuthenticatorType": "client-secret", "secret": p["secret"],
+            "standardFlowEnabled": True, "directAccessGrantsEnabled": False, "implicitFlowEnabled": False,
+            "serviceAccountsEnabled": False, "redirectUris": p["redirects"],
+            "authenticationFlowBindingOverrides": {"browser": flow_id},
+            "attributes": {"valet.agent": "true", "pkce.code.challenge.method": "S256",
+                           "access.token.lifespan": p["lifespan"],
+                           "use.refresh.tokens": "true", "client.use.lightweight.access.token.enabled": "false"},
+            "protocolMappers": [
+                {"name": "valet mandate", "protocol": "openid-connect", "protocolMapper": "valet-grant-mapper",
+                 "config": {"access.token.claim": "true", "introspection.token.claim": "true", "id.token.claim": "false",
+                            "userinfo.token.claim": "false"}},
+                {"name": "gateway audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+                 "config": {"included.custom.audience": MCP_RESOURCE, "access.token.claim": "true",
+                            "id.token.claim": "false", "introspection.token.claim": "true"}}]}))
+        print(f"  client '{client_id}': confidential, PKCE, bearer tokens for {MCP_RESOURCE}")
 
 
 if __name__ == "__main__":
