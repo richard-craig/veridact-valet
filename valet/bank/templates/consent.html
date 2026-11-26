@@ -2,15 +2,17 @@
 {% block body %}
 <h1>Connect an AI assistant</h1>
 <div class="card agentrow"><span class="av">{{ agent.name[0] }}</span><div><b>{{ agent.name }}</b>{% if not assistant %}<div class="sub">{{ agent.operator }}</div>{% endif %}
-{% if assistant %}<div class="known">Known assistant: {{ assistant.name or agent.name }}, operated by {{ assistant.operator }}. Veridact vouches for the platform, not for this particular session.</div><div class="sub">Connects through the bank's MCP server</div>{% elif agent.platform %}<div class="sub">Connects through the bank's MCP gateway</div>{% elif agent.verified %}<div class="ver">✓ Verified by Veridact</div>{% else %}<div class="unver">Not verified</div>{% endif %}</div></div>
+{% if assistant %}<div class="known">Known assistant: {{ assistant.name or agent.name }}, operated by {{ assistant.operator }}. Veridact vouches for the platform, not for this particular session.</div><div class="sub">Connects through the bank's MCP server</div>{% elif agent.platform %}<div class="sub">Connects through the bank's MCP gateway</div>{% elif agent.verified %}<div class="ver">✓ Verified by Veridact</div>{% if agent_host %}<div class="sub">Runs from {{ agent_host }}</div>{% endif %}{% elif agent_host %}<div class="unver">Identified by its website, {{ agent_host }}. Not verified by Veridact.</div>{% else %}<div class="unver">Not verified</div>{% endif %}</div></div>
+{% if agent_host and not agent.verified %}<div class="banner" style="font-weight:600">You approve every payment {{ agent.name }} asks for, in this app. The bank can only confirm which website runs it, not who stands behind it.</div>{% endif %}
 {% if agent.platform %}<div class="banner" style="font-weight:600">You approve every payment {{ agent.name }} asks for, in this app. {{ agent.name }} can only ask to pay people you have already saved.</div>{% endif %}
 <form method="post" action="{{ action | default('/authorize/decision') }}" style="display:flex;flex-direction:column;gap:10px">
 {% if hidden %}{% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
 {% else %}<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="client_id" value="{{ client_id }}"><input type="hidden" name="request_uri" value="{{ request_uri }}">{% endif %}
 <h2>Choose what {{ agent.name }} can do</h2>
 {% for key, lv in levels.items() %}
-<label class="opt"><input type="radio" name="level" value="{{ key }}" {% if key == preselect %}checked{% endif %}><span><b>{{ lv.title }}</b><br><span class="sub">{{ lv.summary }}</span></span></label>
+{% if offered is not defined or key in offered %}<label class="opt"><input type="radio" name="level" value="{{ key }}" {% if key == preselect %}checked{% endif %}><span><b>{{ lv.title }}</b><br><span class="sub">{{ lv.summary }}</span>{% if grants is defined %}<br><span class="sub" style="font-size:12px">Grants: {{ grants(key) }}</span>{% endif %}</span></label>{% endif %}
 {% endfor %}
+{% if offered is defined and not offered %}<div class="banner">{{ agent.name }} asked for access the bank can't give it. You can only decline this request.</div>{% endif %}
 <label class="f">From account<select name="account">{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }} {{ a.number }}</option>{% endfor %}</select></label>
 <label class="f">What it's for<input type="text" name="intent" maxlength="140" value="{{ intent }}" placeholder="e.g. Pay my monthly utility bills"></label>
 {% if payees is defined %}<input type="hidden" name="payees_shown" value="1">

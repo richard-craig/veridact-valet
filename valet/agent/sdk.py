@@ -96,7 +96,7 @@ class ValetClient:
         headers = {"DPoP": make_proof(self.key, "POST", url)} if dpop else {}
         r = await self.http.post(url, data={**data, **self._assertion(audience)}, headers=headers)
         try:
-            body = r.json()
+            body = r.json() if r.content else {}
         except ValueError:
             body = {"error": "server_error", "error_description": r.text[:200]}
         if r.status_code >= 400:
@@ -121,12 +121,16 @@ class ValetClient:
             details = self.session.details          # refresh through an IdP without RAR: same grant, keep what we know
         self.session = Session(body["access_token"], body.get("refresh_token"), grant_id,
                                details, time.time() + body.get("expires_in", 300) - 15)
+        self.scope = body.get("scope")
 
     # ------------------------------------------------------------ connect
     async def start_connect(self, level: str = "bill_payer", account_hint: str | None = None,
-                            intent: str | None = None) -> tuple[str, PendingConnect]:
+                            intent: str | None = None, scope: str | None = None) -> tuple[str, PendingConnect]:
         """Push the request (PAR) and return the URL to send the customer to. `intent` is the purpose the agent
-        states (up to 140 characters); the customer sees it on the consent screen and can change it."""
+        states (up to 140 characters); the customer sees it on the consent screen and can change it.
+
+        `scope` asks the way a plain Personal Agent Protocol agent would: Poppy scopes from the bank's poppy.json
+        (e.g. "payments:standing") and no authorization_details. The bank turns them into the same consent screen."""
         verifier = b64u(secrets.token_bytes(32))
         challenge = b64u(hashlib.sha256(verifier.encode()).digest())
         details = [{"type": "valet_accounts", "actions": ["read_balances", "read_transactions"]}]
@@ -146,7 +150,8 @@ class ValetClient:
                                     audience=self.connect_via.issuer)
             base = self.connect_via.authorize
         else:
-            body = await self._post_form("/par", {**req, "authorization_details": json.dumps(details)})
+            ask = {"scope": scope} if scope else {"authorization_details": json.dumps(details)}
+            body = await self._post_form("/par", {**req, **ask})
             base = self.public_bank_url + "/authorize"
         url = base + "?" + urlencode({"client_id": self.client_id, "request_uri": body["request_uri"]})
         return url, PendingConnect(state, verifier)
@@ -168,6 +173,13 @@ class ValetClient:
     async def grant(self) -> dict[str, Any]:
         """The customer's current grant as the bank holds it: level, permissions, status, spend this month."""
         return await self.call("GET", "/api/grant")
+
+    async def sign_out(self) -> None:
+        """Revoke the refresh token (RFC 7009; Poppy 1.1 section 4.6). The bank disconnects the grant, as if the
+        customer had, and every access token issued under it stops working."""
+        if self.session and self.session.refresh_token:
+            await self._post_form("/revoke", {"token": self.session.refresh_token, "token_type_hint": "refresh_token"})
+        self.session = None
 
     async def refresh(self) -> None:
         body = await self._token_request({"grant_type": "refresh_token", "refresh_token": self.session.refresh_token})

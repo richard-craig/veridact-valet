@@ -16,7 +16,7 @@
 
 <h2>1. Who asked</h2>
 <div class="card" style="display:flex;flex-direction:column;gap:8px">
-<div class="agentrow"><span class="av">{{ agent.name[0] }}</span><div style="flex:1"><b>{{ agent.name }}</b>{% if g.identity == "agent" %}<div class="ver">✓ Verified agent · {{ agent.operator }}</div>{% elif g.identity == "assistant" %}<div class="known">Known assistant · {{ agent.operator }} · platform checked, not this session</div>{% else %}<div class="unver">No longer trusted · {{ agent.operator }}</div>{% endif %}</div></div>
+<div class="agentrow"><span class="av">{{ agent.name[0] }}</span><div style="flex:1"><b>{{ agent.name }}</b>{% if g.identity == "agent" %}<div class="ver">✓ Verified agent · {{ agent.operator }}</div>{% elif g.identity == "assistant" %}<div class="known">Known assistant · {{ agent.operator }} · platform checked, not this session</div>{% elif g.identity == "website" %}<div class="unver">Identified by its website · {{ agent.operator }} · not verified by Veridact</div>{% else %}<div class="unver">No longer trusted · {{ agent.operator }}</div>{% endif %}</div></div>
 <div class="sub">{{ p.channel }}</div>
 {% if p.key %}<div class="row"><span>Agent key</span><span class="mono">{{ p.key }}…</span></div>{% endif %}
 </div>

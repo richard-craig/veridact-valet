@@ -46,6 +46,10 @@ def create_grant(bank: Bank, customer: dict[str, Any], agent: AgentRecord, level
         raise ValueError("that account does not belong to this customer")
     if level not in L.LEVELS:
         raise ValueError(f"unknown access level {level!r}")
+    if not L.within(level, agent.ceiling):
+        # A CIMD agent proves only which website runs it: it may ask to pay, but the customer approves every payment.
+        raise ValueError(f"{agent.name} can be at most {L.LEVELS[agent.ceiling]['title']}: it is identified only by "
+                         "its website, not verified by Veridact")
     monthly = min(int(monthly_cents), cfg.max_monthly_limit)            # the bank's ceiling always wins
     saved = {r["id"]: r["name"] for r in store.q("SELECT id, name FROM beneficiaries WHERE customer=? ORDER BY name",
                                                  customer["id"])}

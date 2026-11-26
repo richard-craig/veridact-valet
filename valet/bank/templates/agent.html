@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block title %}{{ g.agent.name }} · {{ bank_name }}{% endblock %}
 {% block body %}
 <a href="/app" style="color:var(--brand);font-weight:700;text-decoration:none">← AI agents</a>
-<div class="agentrow"><span class="av">{{ g.agent.name[0] }}</span><div style="flex:1"><b style="font-size:20px">{{ g.agent.name }}</b>{% if g.identity == "agent" %}<div class="ver">✓ Verified agent · Veridact · {{ g.agent.operator }}</div>{% elif g.identity == "assistant" %}<div class="known">Known assistant · {{ g.agent.operator }} · the platform is checked with Veridact, not this session</div>{% else %}<div class="unver">Not trusted · {{ g.agent.operator }}</div>{% endif %}</div><span class="pill {{ g.status }}">{{ g.status|capitalize }}</span></div>
+<div class="agentrow"><span class="av">{{ g.agent.name[0] }}</span><div style="flex:1"><b style="font-size:20px">{{ g.agent.name }}</b>{% if g.identity == "agent" %}<div class="ver">✓ Verified agent · Veridact · {{ g.agent.operator }}</div>{% elif g.identity == "assistant" %}<div class="known">Known assistant · {{ g.agent.operator }} · the platform is checked with Veridact, not this session</div>{% elif g.identity == "website" %}<div class="unver">Identified by its website · {{ g.agent.operator }} · not verified by Veridact, so you approve every payment</div>{% else %}<div class="unver">Not trusted · {{ g.agent.operator }}</div>{% endif %}</div><span class="pill {{ g.status }}">{{ g.status|capitalize }}</span></div>
 <div class="card" style="background:var(--bg);border:0;font-size:13px">{{ summary }}</div>
 {% if g.pending %}<a class="banner" href="/app/approvals">{{ g.agent.name }} is waiting for your decision →</a>{% endif %}
 <h2>Activity</h2>

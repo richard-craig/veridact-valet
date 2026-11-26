@@ -24,7 +24,7 @@ KAYA_CALLBACK = "http://kaya.test/callback"
 
 class Harness:
     def __init__(self, data_dir: Path | None = None, signin=None, external_issuers=None, internal_secret: str = "",
-                 **cfg_overrides):
+                 cimd=None, **cfg_overrides):
         self.dir = Path(data_dir or tempfile.mkdtemp(prefix="valet-"))
         write_trust_file(self.dir, DEFAULT_TRUST)
         self.kaya_key, self.copycat_key = Key.generate(), Key.generate()
@@ -32,14 +32,15 @@ class Harness:
         publish_agent_key(self.dir, "copycat", self.copycat_key.jwk, [KAYA_CALLBACK])
         self.cfg = BankConfig(issuer=BANK, data_dir=self.dir, db_path=Path(":memory:"), internal_secret=internal_secret,
                               **cfg_overrides)
-        self.app = create_app(self.cfg, Bank(self.cfg, signin=signin, external_issuers=external_issuers or {}))
+        self.app = create_app(self.cfg, Bank(self.cfg, signin=signin, external_issuers=external_issuers or {},
+                                               cimd=cimd))
         self.bank = self.app.state.bank
         self.transport = httpx.ASGITransport(app=self.app)
         self.kaya = self.agent("kaya", self.kaya_key)
         self.browser = httpx.AsyncClient(transport=self.transport, base_url=BANK, follow_redirects=False)
 
-    def agent(self, client_id: str, key: Key) -> ValetClient:
-        return ValetClient(client_id, key, BANK, KAYA_CALLBACK, issuer=BANK,
+    def agent(self, client_id: str, key: Key, redirect_uri: str = KAYA_CALLBACK) -> ValetClient:
+        return ValetClient(client_id, key, BANK, redirect_uri, issuer=BANK,
                            http=httpx.AsyncClient(transport=self.transport, timeout=10))
 
     # ------------------------------------------------------------- customer

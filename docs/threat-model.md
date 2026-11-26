@@ -146,7 +146,7 @@ flowchart LR
 | Platform egress IP allowlist | Tokens for the platform's client only work from its published ranges (defence in depth) | **Designed** |
 | Sender-constrained internal leg | Gateway exchanges the inbound token for an internal mTLS- or DPoP-bound token to core banking | **Designed** (the PoC calls enforcement in-process) |
 | DPoP accepted when the platform sends it | Tier rises automatically once a token is key-bound | **Built** (gateway accepts DPoP); waiting on platforms |
-| CIMD from an allowlist | Accept Client ID Metadata Documents only from listed platform URLs | **Proposed** |
+| CIMD from an allowlist | Accept Client ID Metadata Documents only from domains the bank approves, checked on every call, with `private_key_jwt` keys from the document | **Built** for agents that sign (`valet/bank/cimd.py`); public CIMD clients (method `none`) are still refused |
 
 ## 4. Threats
 
@@ -181,7 +181,9 @@ A refresh token is a cloakroom ticket. With a confidential client, the ticket on
 
 **Scenario:** an attacker registers a client called "Claude", or a copycat agent names itself after a real one.
 
-**Controls:** no Dynamic Client Registration (**Built**); pre-registered clients only; operator name on the consent screen comes from the registry, never from the request (**Built**); CIMD accepted only from an allowlist (**Proposed**).
+**Controls:** no Dynamic Client Registration (**Built**); pre-registered clients only; operator name on the consent screen comes from the registry, never from the request (**Built**); CIMD accepted only from an allowlist of domains (**Built**). For a CIMD agent the consent screen names the domain that served its document, and labels the self-asserted `client_name` as unverified. A CIMD-only agent is capped at Approved payer.
+
+**CIMD threats Valet handles** (`valet/bank/cimd.py`): the bank never fetches a document from a domain it hasn't approved, so a `client_id` can't steer the bank's requests (SSRF). Hosts that resolve to private, loopback or link-local addresses are refused, redirects aren't followed, and a document is capped at 5 KB. The document's `client_id` must be its own URL, keys from a `jwks_uri` must sit on the same host, and client secrets and secret-based authentication methods are refused. The approved list is read on every call, so removing a domain stops that agent's live grants on its next request, not just new connections.
 
 **Why DCR stays off:** Dynamic Client Registration (RFC 7591) lets a client register itself by posting a description of itself and receiving a client id instantly, with no prior relationship. Anyone can register, anyone can call itself "Claude", every such client is public, and Claude registers a new client on every fresh connection, so the bank accumulates anonymous clients with no owner and no tier.
 

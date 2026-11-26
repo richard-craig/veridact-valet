@@ -55,6 +55,9 @@ class BankConfig:
     # token issuer is on this machine (loopback). It can never be on in a bank deployment.
     allow_first_use_binding: bool = field(
         default_factory=lambda: os.environ.get("VALET_ALLOW_FIRST_USE_BINDING", "") in ("1", "true", "yes"))
+    # CIMD agents (cimd.py): the domains whose client ID metadata documents the bank accepts, and how long a document
+    # is reused. VALET_CIMD='{"approved": ["agent.example"], "cache_seconds": 300}'. Empty: CIMD client ids refused.
+    cimd: dict = field(default_factory=lambda: json.loads(os.environ.get("VALET_CIMD", "{}") or "{}"))
     # Consent hand-off from the bank's IdP (native mode, handoff.py). Unset secret: hand-off off.
     handoff_secret: str = field(default_factory=lambda: os.environ.get("VALET_HANDOFF_SECRET", ""))
     # Which IdPs may hand customers over, and the only address each may be returned to:
