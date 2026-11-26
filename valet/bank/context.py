@@ -7,7 +7,7 @@ from typing import Any
 import jwt
 from fastapi.responses import JSONResponse
 
-from ..common.crypto import Key, verify
+from ..common.crypto import Key, verify, verify_agent
 from ..common.signers import KeyRing, jws_kid
 from .config import BankConfig
 from .core import CoreBanking, DemoCore
@@ -217,9 +217,14 @@ class Bank:
         if not key:
             raise OAuthError("invalid_client", "the assertion's kid names none of this agent's published keys", 401)
         try:
-            claims = verify(assertion, key, audience=self.cfg.issuer, options={"require": ["exp", "iat", "jti", "iss", "sub"]})
+            claims = verify_agent(assertion, key, audience=self.cfg.issuer,
+                                  options={"require": ["exp", "iat", "jti", "iss", "sub"]})
         except jwt.PyJWTError as e:
             raise OAuthError("invalid_client", f"client assertion rejected: {e}", 401) from e
+        if claims["aud"] != self.cfg.issuer:
+            # The issuer itself, as one string (Poppy 1.1 section 4.1, draft-ietf-oauth-rfc7523bis): a list, or the
+            # token endpoint's URL, could be an assertion collected for some other server.
+            raise OAuthError("invalid_client", "the client assertion's aud must be the issuer, as a single string", 401)
         if claims["sub"] != rec.client_id or form.get("client_id", rec.client_id) != rec.client_id:
             raise OAuthError("invalid_client", "assertion subject does not match client_id", 401)
         if claims["exp"] - time.time() > 300:

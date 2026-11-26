@@ -3,7 +3,9 @@ CIMD: OAuth Client ID Metadata Documents (draft-ietf-oauth-client-id-metadata-do
 check. This is how a Personal Agent Protocol (Poppy) agent identifies itself to a company it has never met.
 
 An agent's client_id is an HTTPS URL. The document at that URL names the agent, its redirect URIs and its public keys
-(`jwks` or `jwks_uri`), and its `client_id` must equal the URL. Holding the domain proves only who runs the agent's
+(`jwks_uri`, or inline `jwks`), and its `client_id` must equal the URL. As Poppy 1.1 section 4.1 requires, `jwks_uri`
+and every redirect URI are on the client_id's own host (a loopback redirect URI is the exception, for an app on the
+customer's computer), and keys are EC P-256 (ES256) or RSA of 2048 bits or more (PS384). Holding the domain proves only who runs the agent's
 website. It says nothing about the operator's licensing, conduct or limits. So Valet treats CIMD as the entry tier:
 
     tier       how the bank knows the agent                            highest access level
@@ -32,6 +34,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ..common.crypto import agent_key_alg
+
 MAX_BYTES = 5 * 1024                 # the draft's recommended ceiling for a metadata document
 FORBIDDEN_AUTH = ("client_secret_basic", "client_secret_post", "client_secret_jwt", "none")
 
@@ -52,6 +56,29 @@ def is_cimd_client_id(client_id: str) -> bool:
 
 def host_of(client_id: str) -> str:
     return (urlsplit(client_id).hostname or "").lower()
+
+
+LOOPBACK = ("127.0.0.1", "::1", "localhost")
+
+
+def is_loopback(uri: str) -> bool:
+    """A loopback redirect URI for a native app (RFC 8252 section 7.3)."""
+    p = urlsplit(uri)
+    return p.scheme == "http" and (p.hostname or "") in LOOPBACK and not p.fragment
+
+
+def redirect_matches(uri: str, registered: list[str]) -> bool:
+    """Exact match, except that a loopback redirect URI may use any port (RFC 8252 section 7.3, Poppy 1.1 section 4.2)."""
+    if uri in registered:
+        return True
+    if not is_loopback(uri):
+        return False
+    p = urlsplit(uri)
+    for r in registered:
+        q = urlsplit(r)
+        if is_loopback(r) and (p.scheme, p.hostname, p.path, p.query) == (q.scheme, q.hostname, q.path, q.query):
+            return True
+    return False
 
 
 def approved(host: str, patterns: list[str]) -> bool:
@@ -148,8 +175,11 @@ class CimdResolver:
         if any(k.startswith("client_secret") for k in meta):
             raise CimdInvalid("a metadata document must not carry a client secret")
         redirects = meta.get("redirect_uris") or []
-        if not isinstance(redirects, list) or not all(isinstance(u, str) and u.startswith("https://") for u in redirects):
-            raise CimdInvalid("redirect_uris must be a list of https URLs")
+        host = host_of(client_id)
+        if not isinstance(redirects, list) or not all(
+                isinstance(u, str) and ((u.startswith("https://") and host_of(u) == host) or is_loopback(u))
+                for u in redirects):
+            raise CimdInvalid("redirect_uris must be https URLs on the client's own host, or loopback")
         if "jwks" in meta:
             jwks = meta["jwks"]
         elif isinstance(meta.get("jwks_uri"), str):
@@ -160,10 +190,9 @@ class CimdResolver:
             jwks = json.loads(self._get(uri))
         else:
             raise CimdInvalid("the document names no public keys (jwks or jwks_uri)")
-        keys = [k for k in (jwks or {}).get("keys", []) if isinstance(k, dict) and k.get("kty") == "EC"
-                and k.get("crv") == "P-256" and "d" not in k]
+        keys = [k for k in (jwks or {}).get("keys", []) if isinstance(k, dict) and agent_key_alg(k)]
         if not keys:
-            raise CimdInvalid("no usable ES256 public key")
+            raise CimdInvalid("no usable public key (EC P-256 for ES256, or RSA of 2048 bits or more for PS384)")
         return meta, keys
 
     def readiness(self) -> dict[str, Any]:

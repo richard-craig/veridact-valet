@@ -8,14 +8,16 @@ payer, and is stopped on its next call when the bank takes its domain off the ap
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import time
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 
 from valet.agent.sdk import ValetError
-from valet.bank.cimd import CimdInvalid, CimdResolver, approved, is_cimd_client_id, public_address
+from valet.bank.cimd import CimdInvalid, CimdResolver, approved, is_cimd_client_id, public_address, redirect_matches
 from valet.bank.registry import write_trust_file, DEFAULT_TRUST
 from valet.common.crypto import Key
 from valet.harness import BANK, Harness
@@ -98,6 +100,8 @@ def test_discovery_chain_a_poppy_agent_checks():
         assert prm["dpop_bound_access_tokens_required"] is True
         assert set(prm["scopes_supported"]) == set(poppy["auth"]["scopes"]) == set(asm["scopes_supported"])
         assert asm["client_id_metadata_document_supported"] is True
+        assert asm["revocation_endpoint"] == BANK + "/revoke" and "refresh_token" in asm["grant_types_supported"]
+        assert asm["token_endpoint_auth_signing_alg_values_supported"] == ["ES256", "PS384"]
         assert mcp["resource"] == BANK + "/mcp"                     # MCP clients still get the MCP server's own document
         ext = poppy["extensions"]["veridact.net/valet"][0]
         assert ext["agent_identity"]["cimd"] == {"supported": True, "max_level": "approved_payer"}
@@ -119,21 +123,25 @@ def test_without_cimd_configured_the_bank_says_so():
 
 
 # ------------------------------------------------------------------ a CIMD agent, end to end
+ALL = "accounts:read payments:approve-each payments:standing"
+
+
 def test_cimd_agent_signs_in_with_plain_poppy_scopes_and_is_capped_at_approved_payer():
     async def t():
         h, juno, _ = setup()
         await h.login()
-        url, pending = await juno.start_connect(scope="payments:standing offline_access")
+        url, pending = await juno.start_connect(scope=ALL + " offline_access")
         page, form = await consent_page(h, url)
         assert "Identified by its website, agent.example. Not verified by Veridact." in page
         assert 'value="bill_payer"' not in page                      # not offered: above the CIMD tier's ceiling
         assert re.search(r'value="approved_payer"\s+checked', page)  # asked for Bill payer, preselected at the ceiling
+        assert "Grants: accounts:read payments:approve-each" in page  # the page lists what it will grant (10.8)
         # A forged form can't get round it: the grant service refuses the level.
         r = await h.browser.post("/authorize/decision", data={**form, "level": "bill_payer"})
         assert r.status_code == 400
         assert h.bank.store.one("SELECT COUNT(*) n FROM grants")["n"] == 0
 
-        gid = await connect(h, juno, "approved_payer", "payments:standing")
+        gid = await connect(h, juno, "approved_payer", ALL)
         assert juno.scope == "accounts:read payments:approve-each"   # what was granted, in Poppy's terms
         grant = h.bank.store.grant(gid)
         assert grant["client_id"] == AGENT and grant["level"] == "approved_payer"
@@ -215,6 +223,151 @@ def test_veridact_verified_cimd_agent_may_be_bill_payer_and_falls_back_when_with
         assert held["outcome"] == "approval_pending" and held["reason_code"] == "approved_payer"
         assert "identified only by its website" in held["reason"]
     run(t())
+
+
+# ------------------------------------------------------------------ Poppy 1.1 scope rules (section 4.7)
+def test_never_grants_a_scope_the_agent_did_not_ask_for():
+    async def t():
+        trust = {AGENT: {"name": "Juno", "operator": "Juno Money (Pty) Ltd", "verified": True}}
+        h, juno, _ = setup(trust=trust)
+        await h.login()
+        url, _ = await juno.start_connect(scope="accounts:read")
+        page, form = await consent_page(h, url)
+        assert 'value="view_only"' in page and 'value="approved_payer"' not in page and 'value="bill_payer"' not in page
+        r = await h.browser.post("/authorize/decision", data={**form, "level": "bill_payer"})
+        assert r.status_code == 400 and "more than the agent asked for" in r.text
+        await connect(h, juno, "view_only", "accounts:read")
+        assert juno.scope == "accounts:read"
+        # Asked only for standing payments: Approved payer would grant payments:approve-each, which wasn't asked for.
+        url, _ = await juno.start_connect(scope="payments:standing")
+        page, _ = await consent_page(h, url)
+        assert 'value="bill_payer"' in page and 'value="approved_payer"' not in page and 'value="view_only"' not in page
+    run(t())
+
+
+def test_cimd_agent_asking_only_for_what_its_tier_cannot_have_can_only_be_declined():
+    async def t():
+        h, juno, _ = setup()
+        await h.login()
+        url, _ = await juno.start_connect(scope="payments:standing")
+        page, form = await consent_page(h, url)
+        assert 'name="level"' not in page and "asked for access the bank can't give it" in page
+        r = await h.browser.post("/authorize/decision", data={**form, "level": "approved_payer"})
+        assert r.status_code == 400
+    run(t())
+
+
+def test_token_for_a_resource_the_bank_does_not_offer_agents_is_invalid_target():
+    async def t():
+        h, juno, _ = setup()
+        await h.login()
+        await connect(h, juno, "view_only", "accounts:read")
+        for resource, ok in ((BANK + "/mcp", False), ("https://elsewhere.example", False), (BANK, True)):
+            try:
+                await juno._token_request({"grant_type": "refresh_token", "refresh_token": juno.session.refresh_token,
+                                           "resource": resource})
+                assert ok, resource
+            except ValetError as e:
+                assert not ok and e.error == "invalid_target", resource
+    run(t())
+
+
+# ------------------------------------------------------------------ sign-out (section 4.6, RFC 7009)
+def test_agent_signs_out_by_revoking_its_refresh_token():
+    async def t():
+        h, juno, _ = setup()
+        await h.login()
+        gid = await connect(h, juno, "view_only", "accounts:read")
+        assert await juno._post_form("/revoke", {"token": "rt_not_ours"}) == {}   # unknown tokens: the same 200
+        assert h.bank.store.grant(gid)["status"] == "active"
+        session = juno.session
+        await juno.sign_out()
+        assert h.bank.store.grant(gid)["status"] == "revoked"
+        juno.session = session
+        with pytest.raises(ValetError):
+            await juno.accounts()                                    # its access token stopped with the grant
+        with pytest.raises(ValetError) as e:
+            await juno.refresh()
+        assert e.value.error == "invalid_grant"
+        revoked = [r for r in all_receipts(h) if r.get("action") == "revoke"]
+        assert len(revoked) == 1 and "signed out" in revoked[0]["reason"] and revoked[0]["grant_id"] == gid
+    run(t())
+
+
+def test_another_agent_cannot_revoke_someone_elses_grant():
+    async def t():
+        h, juno, _ = setup()
+        await h.login()
+        gid = await connect(h, juno, "view_only", "accounts:read")
+        await h.connect()                                            # Kaya, the bank's registered demo agent
+        assert await h.kaya._post_form("/revoke", {"token": juno.session.refresh_token}) == {}
+        assert h.bank.store.grant(gid)["status"] == "active"
+    run(t())
+
+
+# ------------------------------------------------------------------ client authentication (section 4.1)
+def test_client_assertion_audience_must_be_the_issuer_as_one_string():
+    async def t():
+        h, juno, _ = setup()
+        for aud in ([BANK], BANK + "/token", "https://other.bank"):
+            juno._assertion = _assertion_with(juno, aud=aud)
+            with pytest.raises(ValetError) as e:
+                await juno.start_connect(scope="accounts:read")
+            assert e.value.error == "invalid_client", aud
+    run(t())
+
+
+def test_ps384_rsa_keys_are_accepted_for_client_assertions_and_delegations():
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import jwt as pyjwt
+    from valet.common.poppy import make_session, read_session
+    rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub = {**json.loads(pyjwt.algorithms.RSAAlgorithm.to_jwk(rsa_key.public_key())), "kid": "rsa-1"}
+    web = Web(Key.generate())
+    web.docs[AGENT]["jwks"] = {"keys": [pub]}
+    h = Harness(cimd=web.resolver())
+    now = int(time.time())
+    assertion = pyjwt.encode({"iss": AGENT, "sub": AGENT, "aud": BANK, "iat": now, "exp": now + 60, "jti": "j1"},
+                             rsa_key, algorithm="PS384", headers={"kid": "rsa-1"})
+    form = {"client_id": AGENT, "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+            "client_assertion": assertion}
+    assert h.bank.authenticate_client(form).client_id == AGENT
+    rs256 = pyjwt.encode({"iss": AGENT, "sub": AGENT, "aud": BANK, "iat": now, "exp": now + 60, "jti": "j2"},
+                         rsa_key, algorithm="RS256", headers={"kid": "rsa-1"})
+    with pytest.raises(Exception):
+        h.bank.authenticate_client({**form, "client_assertion": rs256})   # PS384 only, not any RSA algorithm
+    # A delegation signed blindly (PS384) by the agent's RSA key vouches for an ES256 delegated key.
+    delegated = Key.generate()
+    dlg = pyjwt.encode({"iss": AGENT, "cnf": {"jwk": delegated.jwk}, "iat": now, "exp": now + 3600, "jti": "d1"},
+                       rsa_key, algorithm="PS384", headers={"typ": "poppy-delegation+jwt", "kid": "rsa-1"})
+    session = make_session(delegated, dlg, AGENT, BANK, "s1", "u1", "GET", BANK + "/api/accounts")
+    rec = h.bank.registry.lookup(AGENT)
+    assert read_session(session, lambda iss, kid: rec.key_for(kid), BANK, "GET", BANK + "/api/accounts")["verified"]
+
+
+def test_redirect_uris_must_be_on_the_agents_host_or_loopback():
+    for uris, ok in ((["https://evil.example/cb"], False), (["https://agent.example/cb", "http://127.0.0.1/cb"], True),
+                     (["http://agent.example/cb"], False)):
+        web = Web(Key.generate(), redirect_uris=uris)
+        assert bool(web.resolver().resolve(AGENT)) is ok, uris
+    assert redirect_matches("http://127.0.0.1:53121/cb", ["http://127.0.0.1/cb"])      # any port, RFC 8252
+    assert not redirect_matches("http://127.0.0.1:53121/other", ["http://127.0.0.1/cb"])
+    assert not redirect_matches("https://agent.example:8443/cb", ["https://agent.example/cb"])
+
+
+def _assertion_with(agent, **claims):
+    def make(audience=None):
+        now = int(time.time())
+        body = {"iss": agent.client_id, "sub": agent.client_id, "aud": BANK, "iat": now, "exp": now + 60,
+                "jti": f"ca_{time.time_ns()}", **claims}
+        return {"client_id": agent.client_id, "client_assertion_type":
+                "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": agent.key.sign(body, headers={"kid": agent.key.thumbprint})}
+    return make
+
+
+def all_receipts(h: Harness) -> list[dict]:
+    return [json.loads(r["record"]) for r in h.bank.store.q("SELECT record FROM receipts ORDER BY seq")]
 
 
 # ------------------------------------------------------------------ document checks

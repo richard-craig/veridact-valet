@@ -10,8 +10,9 @@
 {% else %}<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="client_id" value="{{ client_id }}"><input type="hidden" name="request_uri" value="{{ request_uri }}">{% endif %}
 <h2>Choose what {{ agent.name }} can do</h2>
 {% for key, lv in levels.items() %}
-{% if within is not defined or within(key, ceiling) %}<label class="opt"><input type="radio" name="level" value="{{ key }}" {% if key == preselect %}checked{% endif %}><span><b>{{ lv.title }}</b><br><span class="sub">{{ lv.summary }}</span></span></label>{% endif %}
+{% if offered is not defined or key in offered %}<label class="opt"><input type="radio" name="level" value="{{ key }}" {% if key == preselect %}checked{% endif %}><span><b>{{ lv.title }}</b><br><span class="sub">{{ lv.summary }}</span>{% if grants is defined %}<br><span class="sub" style="font-size:12px">Grants: {{ grants(key) }}</span>{% endif %}</span></label>{% endif %}
 {% endfor %}
+{% if offered is defined and not offered %}<div class="banner">{{ agent.name }} asked for access the bank can't give it. You can only decline this request.</div>{% endif %}
 <label class="f">From account<select name="account">{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }} {{ a.number }}</option>{% endfor %}</select></label>
 <label class="f">What it's for<input type="text" name="intent" maxlength="140" value="{{ intent }}" placeholder="e.g. Pay my monthly utility bills"></label>
 {% if payees is defined %}<input type="hidden" name="payees_shown" value="1">

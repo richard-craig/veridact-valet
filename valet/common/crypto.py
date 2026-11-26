@@ -1,8 +1,12 @@
 """
-Small, explicit crypto helpers. ES256 (P-256) only, everywhere.
+Small, explicit crypto helpers. ES256 (P-256) everywhere the bank signs or chooses the algorithm.
 
 - Keys and JWKs, with RFC 7638 thumbprints (used as DPoP `jkt`).
 - Signing and verifying compact JWS/JWT with an algorithm allow-list of exactly ["ES256"].
+- One exception, `verify_agent`: an agent's client assertions and Poppy delegations may also be PS384 with an RSA key,
+  which Poppy 1.1 (sections 4.1 and 5.2) requires a bank to accept, so agents can have them signed blindly (RFC 9474).
+  The key type fixes the algorithm (EC P-256: ES256; RSA, at least 2048 bits: PS384), so neither can stand in for the
+  other.
 - JSON canonicalisation for hashing (a JCS subset: sorted keys, no whitespace, UTF-8),
   which is exact for the strings, integers and booleans Valet hashes.
 """
@@ -87,7 +91,8 @@ class Key:
 
 def jwk_thumbprint(jwk: dict[str, Any]) -> str:
     """RFC 7638: SHA-256 over the required members in lexicographic order."""
-    required = {k: jwk[k] for k in ("crv", "kty", "x", "y")}
+    members = ("e", "kty", "n") if jwk.get("kty") == "RSA" else ("crv", "kty", "x", "y")
+    required = {k: jwk[k] for k in members}
     return sha256_b64u(json.dumps(required, sort_keys=True, separators=(",", ":")))
 
 
@@ -95,6 +100,34 @@ def public_key_from_jwk(jwk: dict[str, Any]):
     if jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
         raise ValueError("only EC P-256 keys are accepted")
     return jwt.algorithms.ECAlgorithm.from_jwk(json.dumps({k: jwk[k] for k in ("kty", "crv", "x", "y")}))
+
+
+RSA_PRIVATE = ("d", "p", "q", "dp", "dq", "qi", "oth")
+MIN_RSA_BITS = 2048
+
+
+def agent_key_alg(jwk: dict[str, Any]) -> str | None:
+    """The one algorithm an agent's published key may sign with, or None if Valet doesn't accept the key."""
+    if jwk.get("kty") == "EC" and jwk.get("crv") == "P-256" and "d" not in jwk and {"x", "y"} <= set(jwk):
+        return "ES256"
+    if jwk.get("kty") == "RSA" and {"n", "e"} <= set(jwk) and not any(k in jwk for k in RSA_PRIVATE):
+        try:
+            bits = len(base64.urlsafe_b64decode(jwk["n"] + "=" * (-len(jwk["n"]) % 4)).lstrip(b"\0")) * 8
+        except (ValueError, TypeError):
+            return None
+        return "PS384" if bits >= MIN_RSA_BITS else None
+    return None
+
+
+def verify_agent(token: str, jwk: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    """Verify an agent's client assertion or delegation: ES256 for a P-256 key, PS384 for an RSA key."""
+    alg = agent_key_alg(jwk)
+    if alg is None:
+        raise jwt.InvalidKeyError("the agent's key is not an accepted EC P-256 or RSA (2048 bits or more) key")
+    if alg == "ES256":
+        return verify(token, jwk, **kwargs)
+    key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps({k: jwk[k] for k in ("kty", "n", "e")}))
+    return jwt.decode(token, key, algorithms=["PS384"], **kwargs)
 
 
 def verify(token: str, jwk: dict[str, Any], **kwargs: Any) -> dict[str, Any]:

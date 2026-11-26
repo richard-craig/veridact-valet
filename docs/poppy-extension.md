@@ -1,10 +1,11 @@
 # `veridact.net/valet`: a banking extension for the Personal Agent Protocol
 
-Draft, version 1 · 25 November 2026 · Not registered with Poppy; offered to the Poppy authors as input to their
-roadmap items "Signed approvals" and "Payments". Built in the proof of concept: discovery and the OAuth metadata
-behind it, scope-only sign-in, CIMD agents with identity tiers, scope hints and Session IDs in receipts
-(`valet/bank/poppy.py`, `valet/bank/cimd.py`, `tests/test_poppy.py`, `tests/test_cimd.py`). Not built: the
-operations flow in §3.2.
+Draft, version 1 · 26 November 2026 · Aligned to Poppy 1.1 (draft), and works with 1.0 agents. Not registered with
+Poppy; offered to the Poppy authors as input to their roadmap items "Signed approvals" and "Payments". Built in the
+proof of concept: discovery and the OAuth metadata behind it, scope-only sign-in, sign-out, CIMD agents with identity
+tiers, scope hints, and verified Sessions in receipts (`valet/bank/poppy.py`, `valet/bank/cimd.py`,
+`tests/test_poppy.py`, `tests/test_cimd.py`). Not built: the operations flow in §3.2. What Valet does for each
+Poppy 1.1 rule that applies to a bank is in §8.
 
 ## Summary
 
@@ -67,7 +68,7 @@ serves both halves:
 |---|---|
 | `/.well-known/poppy.json` | `auth.issuer`: Valet's authorisation server, and `organization.domain`: the bank's host |
 | `/.well-known/oauth-protected-resource` (RFC 9728) | `resource`: the bank's domain; `authorization_servers`: the same issuer; DPoP-bound tokens required |
-| `/.well-known/oauth-authorization-server` (RFC 8414) | `protected_resources` lists the domain back; `scopes_supported`, `authorization_details_types_supported` and `client_id_metadata_document_supported` |
+| `/.well-known/oauth-authorization-server` (RFC 8414) | `protected_resources` lists the domain back; `revocation_endpoint`, `grant_types_supported` with `refresh_token`, `scopes_supported`, `token_endpoint_auth_signing_alg_values_supported` (`ES256`, `PS384`), `authorization_details_types_supported` and `client_id_metadata_document_supported` |
 
 The MCP server keeps its own path-inserted document (`/.well-known/oauth-protected-resource/mcp`), whose `resource`
 is the MCP URL, as MCP clients expect.
@@ -87,11 +88,28 @@ consent screen** during Poppy Direct Sign-In (Poppy §4.2). They choose the acco
 bank stores the mandate as Valet `authorization_details` (Valet profile §3), and the access token carries the grant id.
 
 So an agent needs nothing Valet-specific to connect. It pushes an ordinary request (PAR, as the server metadata
-requires) with `scope=payments:standing` and no `authorization_details`. The bank turns the scope into the matching
-level's template, and the customer completes it. The token response returns the granted level as a `scope`
-(`accounts:read payments:approve-each` if the customer chose Approved payer) alongside the exact
-`authorization_details`. An agent that sends `authorization_details` gets the same flow with more control over what
-is preselected. Unknown scopes are refused with `invalid_scope`; `offline_access` is accepted and changes nothing.
+requires) with a `scope` and no `authorization_details`. The bank turns the scope into the matching level's
+template, and the customer completes it. An agent that also sends `authorization_details` gets the same flow with
+more control over what is preselected. Unknown scopes are refused with `invalid_scope`; `offline_access` is accepted
+and changes nothing.
+
+**Never more than was asked for** (Poppy §4.7). Each level includes the powers of the levels below it, so it implies
+their scopes: View only implies `accounts:read`; Approved payer adds `payments:approve-each`; Bill payer adds
+`payments:standing`. A grant gives the chosen level's scopes **that the agent asked for**, and no others. So the
+consent screen offers only the levels, up to the highest one asked for, that grant at least one requested scope, and
+lists under each what it will grant (Poppy §10.8). The token response's `scope` is what was granted.
+
+| Agent asks for | Customer can choose | Granted `scope` |
+|---|---|---|
+| `accounts:read` | View only | `accounts:read` |
+| `accounts:read payments:approve-each payments:standing` | Any level (a CIMD agent: up to Approved payer) | The chosen level's scopes |
+| `payments:standing` | Bill payer only | `payments:standing` |
+
+An agent should ask for every scope it could use. A CIMD agent that asks only for `payments:standing` can only be
+declined, because its tier stops at Approved payer and Approved payer grants nothing it asked for.
+
+Valet's own agents can still ask with `authorization_details` alone, with no `scope`. That's this extension's
+request form (Poppy §3.3); the grant then reports all of its level's scopes.
 
 Valet offers Direct Sign-In only. It does not offer Device Sign-In (the device authorization grant): a code the
 customer types on another screen is the pattern device-code phishing exploits, and a bank shouldn't switch it on to
@@ -203,13 +221,21 @@ unknown (Valet technical design §8). With this extension, each receipt also rec
 
 So a dispute can follow one continuous Session across reads, the held payment, the approval and the result.
 
-A Session never grants anything: access comes only from the token and the mandate. An unverifiable Session is still
-recorded, marked `verified: false` with the reason, so a forged or broken header leaves evidence and opens no door.
+A Session never grants anything: access comes only from the token and the mandate. As Poppy §5.3 requires, a request
+whose Session header fails verification is refused with `invalid_session` (HTTP 400), and one without a
+`Poppy-Version` the bank serves (1.0 or 1.1) with `version_unsupported`. So every Session in a receipt is a verified
+one, with the version it used. A request without a Session header goes on as before: Valet records a Session, but
+never needs one. If the bank's agent registry can't be reached, the request is judged on its token and mandate and
+the Session isn't recorded.
 
 The agent can fetch the receipts that concern its own grant. They are verifiable with the bank's published keys
 (`receipts.keys` in §1).
 
 ## 5. Stopping
+
+The agent signs out by revoking its refresh token at `revocation_endpoint` (RFC 7009, Poppy §4.6). A grant has one
+refresh token at a time, so this disconnects the grant, exactly as if the customer had, and its access tokens stop
+with it. The receipt records that the agent signed out. An agent the bank no longer trusts can still sign out.
 
 The customer can disconnect or pause in the bank app at any time. This revokes the Poppy refresh tokens (Poppy
 §4.6), pauses the mandate, and cancels held payments that haven't reached the bank, all recorded in receipts. The
@@ -233,6 +259,28 @@ bank's denylist and Veridact withdrawal work as in Valet (Valet technical design
 3. Should reasons limited to the user's own limits be allowed in `operations`, under the existing rule that a
    `reason` reveals nothing the Session couldn't see?
 4. Is there interest in a shared receipt format, so evidence reads the same across companies?
+
+## 8. Poppy 1.1 conformance
+
+What Valet does for each Poppy 1.1 rule that applies to a bank. Conversations (§8), web browsing (§6) and task
+coverage (§9) don't: Valet has no Company Agent, no website for agents to browse, and no tasks endpoint.
+
+| Poppy 1.1 | Valet |
+|---|---|
+| §3: `poppy.json`, `organization.domain` is the serving host | Served; `protocol_version` `1.1` |
+| §3.2: domain protected resource metadata; issuer lists the domain in `protected_resources` | Both served (§1.1) |
+| §3.2: `revocation_endpoint`, `grant_types_supported` with `refresh_token` | `/revoke`; listed |
+| §3.4: `Poppy-Version` checked where Sessions are verified; `version_unsupported` | 1.0 and 1.1 accepted; others refused |
+| §4.1: `client_id` is a CIMD URL; `jwks_uri` and `redirect_uris` on its host (or loopback) | Enforced for CIMD agents (`cimd.py`). Valet's registered demo agents use short client ids, which a 1.1 agent never would |
+| §4.1: `private_key_jwt`, `aud` the issuer as one string, `exp` up to 5 minutes | Enforced; a list or the token endpoint as `aud` is refused |
+| §4.1, §5.2: accept `ES256` and `PS384` assertions and delegations | Both; the key type fixes the algorithm (P-256: ES256; RSA, 2048 bits or more: PS384) |
+| §4.2: Direct Sign-In with PKCE, PAR when required, `iss` on the redirect, exact `redirect_uri`, loopback on any port | All; PAR is required. The consent page is shown on every request, so `prompt=consent` changes nothing |
+| §4.3: Device Sign-In | Not offered, on purpose (§2) |
+| §4.4: refresh tokens; DPoP key kept across refreshes | Rotated with a short retry window, bound to the DPoP key from consent. A `scope` sent at refresh to narrow access is ignored: the token keeps the grant's scope |
+| §4.5: a `resource` the bank doesn't serve to agents gets `invalid_target` | The bank's domain only. The MCP server takes tokens from the bank's IdP, issued to AI platforms, so Poppy agents use the API |
+| §4.7: `scope` required, unknown ones `invalid_scope`, never more than requested, at least one granted | As above (§2). Valet's own agents may use `authorization_details` instead (§2) |
+| §5.2, §5.3: Session JWT and delegation checks; delegation key by `kid`; `ath` present exactly when a token is | All; failures are `invalid_session` |
+| §5.3 step 3: the access token issued to the Session's `client_id` | Checked |
 
 ## References
 

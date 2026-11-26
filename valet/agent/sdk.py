@@ -96,7 +96,7 @@ class ValetClient:
         headers = {"DPoP": make_proof(self.key, "POST", url)} if dpop else {}
         r = await self.http.post(url, data={**data, **self._assertion(audience)}, headers=headers)
         try:
-            body = r.json()
+            body = r.json() if r.content else {}
         except ValueError:
             body = {"error": "server_error", "error_description": r.text[:200]}
         if r.status_code >= 400:
@@ -173,6 +173,13 @@ class ValetClient:
     async def grant(self) -> dict[str, Any]:
         """The customer's current grant as the bank holds it: level, permissions, status, spend this month."""
         return await self.call("GET", "/api/grant")
+
+    async def sign_out(self) -> None:
+        """Revoke the refresh token (RFC 7009; Poppy 1.1 section 4.6). The bank disconnects the grant, as if the
+        customer had, and every access token issued under it stops working."""
+        if self.session and self.session.refresh_token:
+            await self._post_form("/revoke", {"token": self.session.refresh_token, "token_type_hint": "refresh_token"})
+        self.session = None
 
     async def refresh(self) -> None:
         body = await self._token_request({"grant_type": "refresh_token", "refresh_token": self.session.refresh_token})

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, customer TEXT, client_id
     issuer TEXT);
 CREATE TABLE IF NOT EXISTS codes (code TEXT PRIMARY KEY, grant_id TEXT, client_id TEXT, redirect_uri TEXT,
     challenge TEXT, expires REAL, used INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS grant_scope (grant_id TEXT PRIMARY KEY, requested TEXT);
 CREATE TABLE IF NOT EXISTS refresh (hash TEXT PRIMARY KEY, grant_id TEXT, jkt TEXT, used INTEGER DEFAULT 0, created REAL);
 CREATE TABLE IF NOT EXISTS hints (grant_id TEXT, digest TEXT, detail TEXT, expires REAL, PRIMARY KEY (grant_id, digest));
 CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, grant_id TEXT, client_id TEXT, detail TEXT, digest TEXT,

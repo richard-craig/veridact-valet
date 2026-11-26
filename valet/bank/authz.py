@@ -12,15 +12,17 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from ..common.crypto import b64u, digest, random_id, sha256_b64u
 from ..common.dpop import DPoPError, check_proof
 from ..common.money import to_cents
 from . import levels as L
 from .context import Bank, OAuthError
+from .cimd import redirect_matches
 from .grants import create_grant
-from .poppy import LEVEL_SCOPE, SCOPES, ScopeError, details_for_scopes, domain_resource
+from .poppy import (SCOPES, ScopeError, details_for_scopes, domain_resource, granted_scope, level_allowed,
+                    parse_scope)
 from .web import current_customer, csrf_ok, csrf_token, needs_step_up, render, step_up
 
 KNOWN_TYPES = {"valet_accounts", "valet_payments"}
@@ -47,6 +49,8 @@ def router(bank: Bank) -> APIRouter:
         i = cfg.issuer
         return {"issuer": i, "pushed_authorization_request_endpoint": f"{i}/par", "authorization_endpoint": f"{i}/authorize",
                 "token_endpoint": f"{i}/token", "backchannel_authentication_endpoint": f"{i}/bc-authorize",
+                "revocation_endpoint": f"{i}/revoke", "revocation_endpoint_auth_methods_supported": ["private_key_jwt"],
+                "token_endpoint_auth_signing_alg_values_supported": ["ES256", "PS384"],
                 "jwks_uri": f"{i}/jwks", "require_pushed_authorization_requests": True,
                 "authorization_response_iss_parameter_supported": True,
                 "token_endpoint_auth_methods_supported": ["private_key_jwt"], "dpop_signing_alg_values_supported": ["ES256"],
@@ -76,7 +80,7 @@ def router(bank: Bank) -> APIRouter:
             rec = bank.authenticate_client(form)
             if form.get("response_type") != "code":
                 raise OAuthError("unsupported_response_type", "response_type must be code")
-            if form.get("redirect_uri") not in rec.redirect_uris:
+            if not redirect_matches(form.get("redirect_uri", ""), rec.redirect_uris):
                 raise OAuthError("invalid_request", "redirect_uri is not registered for this agent")
             if not form.get("code_challenge") or form.get("code_challenge_method") != "S256":
                 raise OAuthError("invalid_request", "PKCE with S256 is required")
@@ -86,11 +90,15 @@ def router(bank: Bank) -> APIRouter:
                 raise OAuthError("invalid_authorization_details", "authorization_details is not JSON") from e
             if not isinstance(details, list) or any(d.get("type") not in KNOWN_TYPES for d in details):
                 raise OAuthError("invalid_authorization_details", "unknown authorization_details type")
-            if not details and form.get("scope"):
-                # A Poppy agent that knows only scopes: start the consent screen from the matching level. Where both
-                # are sent, authorization_details is the request and scope is ignored.
+            requested = None
+            if form.get("scope"):
+                # Poppy 1.1 section 4.7: the scope is what the customer may grant, and no more. A Poppy agent that
+                # knows only scopes gets the consent screen started from the matching level; one that also sends
+                # authorization_details gets those preselected, still within its scope.
                 try:
-                    details = details_for_scopes(form["scope"])
+                    requested = parse_scope(form["scope"])
+                    if not details:
+                        details = details_for_scopes(form["scope"])
                 except ScopeError as e:
                     raise OAuthError("invalid_scope", str(e)) from e
             # The agent names its DPoP key now (RFC 9449 section 10: dpop_jkt, or a DPoP proof on this request), so
@@ -106,7 +114,7 @@ def router(bank: Bank) -> APIRouter:
                                                     "agent's key when the customer consents")
             request_uri = "urn:ietf:params:oauth:request_uri:" + secrets.token_urlsafe(24)
             params = ({k: form.get(k) for k in ("redirect_uri", "state", "code_challenge")}
-                      | {"details": details, "dpop_jkt": jkt})
+                      | {"details": details, "dpop_jkt": jkt, "scope": requested})
             store.x("INSERT INTO par VALUES (?,?,?,?,0)", request_uri, rec.client_id, json.dumps(params), time.time() + cfg.par_ttl)
             return JSONResponse({"request_uri": request_uri, "expires_in": cfg.par_ttl}, status_code=201)
         except OAuthError as e:
@@ -136,12 +144,15 @@ def router(bank: Bank) -> APIRouter:
         rec = bank.registry.lookup(client_id)
         accounts = store.q("SELECT * FROM accounts WHERE customer=?", cus["id"])
         payees = store.q("SELECT id, name, account FROM beneficiaries WHERE customer=? ORDER BY name", cus["id"])
+        requested = params.get("scope")
+        offered = [k for k in L.LEVELS if L.within(k, rec.ceiling) and level_allowed(k, requested)]
         preselect = L.requested_level(params["details"])
-        if not L.within(preselect, rec.ceiling):
-            preselect = rec.ceiling
+        if preselect not in offered:
+            preselect = offered[-1] if offered else None
         return render(request, "consent.html", bank, customer=cus, agent=rec, client_id=client_id, request_uri=request_uri,
                       preselect=preselect, levels=L.LEVELS, accounts=accounts, ceiling=rec.ceiling,
-                      within=L.within, agent_host=_host(client_id) if rec.cimd else None,
+                      offered=offered, grants=lambda k: granted_scope(k, requested),
+                      agent_host=_host(client_id) if rec.cimd else None,
                       payees=payees, intent=L.requested_intent(params["details"]) or "", **L.consent_options(cfg),
                       days=cfg.max_grant_days, csrf=csrf_token(bank, cus["id"]))
 
@@ -165,6 +176,10 @@ def router(bank: Bank) -> APIRouter:
             return RedirectResponse(redirect + "?" + urlencode({"error": "access_denied", "state": state,
                                                                 "iss": cfg.issuer}), 303)
         rec = bank.registry.lookup(form["client_id"])
+        requested = params.get("scope")
+        if not level_allowed(form.get("level", "view_only"), requested):
+            return HTMLResponse("<h1>Invalid choice</h1><p>That access is more than the agent asked for.</p>",
+                                status_code=400)
         try:
             grant = create_grant(bank, cus, rec, form.get("level", "view_only"), form.get("account", ""),
                                  int(form.get("monthly") or 2_000_00), via="Valet consent screen",
@@ -172,6 +187,8 @@ def router(bank: Bank) -> APIRouter:
         except ValueError:
             return HTMLResponse("<h1>Invalid choice</h1>", status_code=400)
         gid, now = grant["id"], time.time()
+        if requested is not None:
+            store.x("INSERT INTO grant_scope VALUES (?,?)", gid, " ".join(requested))
         code = secrets.token_urlsafe(24)
         store.x("INSERT INTO codes VALUES (?,?,?,?,?,?,0)", code, gid, rec.client_id, redirect, params["code_challenge"],
                 now + cfg.code_ttl)
@@ -185,6 +202,10 @@ def router(bank: Bank) -> APIRouter:
             form = _form(await request.form())
             rec = bank.authenticate_client(form)
             gt = form.get("grant_type")
+            if form.get("resource") not in (None, "", domain_resource(bank)):
+                # RFC 8707. Valet's tokens work at the bank's API; the MCP server takes tokens from the bank's IdP,
+                # issued to AI platforms, so a Poppy agent doesn't use it signed in (Poppy 1.1 section 4.5).
+                raise OAuthError("invalid_target", "this bank issues agents tokens only for " + domain_resource(bank))
             if gt == "authorization_code":
                 return code_grant(request, form, rec)
             if gt == "refresh_token":
@@ -194,6 +215,31 @@ def router(bank: Bank) -> APIRouter:
             raise OAuthError("unsupported_grant_type", f"grant_type {gt!r} is not supported")
         except OAuthError as e:
             return e.response()
+
+    # --------------------------------------------------------------- revocation (RFC 7009; Poppy 1.1 section 4.6)
+    @r.post("/revoke")
+    async def revoke(request: Request):
+        """The agent signs out. A grant has one refresh token at a time, so revoking it disconnects the grant, exactly
+        as if the customer had; access tokens issued under it stop with it. Unknown tokens, and access tokens, get the
+        same 200 RFC 7009 section 2.2 requires. An agent the bank no longer trusts can still sign out."""
+        try:
+            form = _form(await request.form())
+            rec = bank.authenticate_client(form, require_trusted=False)
+        except OAuthError as e:
+            return e.response()
+        row = store.one("SELECT grant_id FROM refresh WHERE hash=?", sha256_b64u(form.get("token") or ""))
+        grant = store.grant(row["grant_id"]) if row else None
+        if grant and grant["client_id"] == rec.client_id and grant["status"] in ("active", "paused"):
+            bank.stop_grant(grant["id"], "revoked", "the agent signed out")
+            store.x("DELETE FROM refresh WHERE grant_id=?", grant["id"])
+            bank.receipts.append(grant_id=grant["id"], agent=grant["client_id"], customer=grant["customer"],
+                                 action="revoke", outcome="revoked", basis="grant",
+                                 reason="the agent revoked its refresh token (signed out)")
+        return Response(status_code=200, headers={"Cache-Control": "no-store"})
+
+    def grant_scope(grant: dict[str, Any]) -> str:
+        row = store.one("SELECT requested FROM grant_scope WHERE grant_id=?", grant["id"])
+        return granted_scope(grant["level"], row["requested"].split() if row else None)
 
     def new_refresh(grant_id: str, jkt: str) -> str:
         rt = "rt_" + secrets.token_urlsafe(32)
@@ -205,7 +251,7 @@ def router(bank: Bank) -> APIRouter:
         # scope says, in Poppy's terms, what the customer granted; authorization_details says exactly what.
         return JSONResponse({"access_token": at, "token_type": "DPoP", "expires_in": cfg.access_ttl,
                              "refresh_token": new_refresh(grant["id"], jkt), "grant_id": grant["id"],
-                             "scope": LEVEL_SCOPE[grant["level"]],
+                             "scope": grant_scope(grant),
                              "authorization_details": grant["details"]}, headers={"Cache-Control": "no-store"})
 
     def code_grant(request: Request, form: dict[str, Any], rec) -> JSONResponse:

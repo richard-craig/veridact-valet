@@ -28,7 +28,7 @@ The proof of concept contains:
 | **Marula Bank** (`valet/bank`) | A fictional bank: a minimal OAuth 2.0 authorisation server (FAPI 2.0-aligned, conformance pending), a banking API with Valet's checks, Valet's grant service and payment intents, a fictional core banking system that executes payments, and the customer's "AI agents" screens. |
 | **Kaya** (`valet/agent`) | A fictional money-assistant agent and the small client SDK it uses. Kaya never sees a password, PIN or OTP. |
 | `demo.py` | A scripted end-to-end run: 13 steps, 24 checks, exits non-zero if any protection fails. |
-| `tests/` | 201 behaviour tests: the Valet profile conformance suite, plus payment safety (retries, crashes, timeouts, cancel-or-confirm, pause mid-payment), the emergency stop, signed evidence packs, and the bank's own identity provider in both deployment modes. |
+| `tests/` | 210 behaviour tests: the Valet profile conformance suite, plus payment safety (retries, crashes, timeouts, cancel-or-confirm, pause mid-payment), the emergency stop, signed evidence packs, and the bank's own identity provider in both deployment modes. |
 | `extensions/keycloak-valet` | A Keycloak extension (Java) for native mode: hands the customer to Valet's consent screen mid-login and puts the Valet grant id in Keycloak's tokens. |
 
 > Marula Bank, Kaya, Kaya Labs and Thandi are fictional, as are all account numbers. This is a demonstration,
