@@ -221,7 +221,8 @@ def router(bank) -> APIRouter:
                 # credential; a known assistant is a platform Veridact knows about, not a verified instance.
                 "identity": ("untrusted" if not bank.registry.is_trusted(g["client_id"])
                              else "assistant" if rec and rec.platform
-                             else "agent" if rec and rec.verified else "untrusted")}
+                             else "agent" if rec and rec.verified
+                             else "website" if rec and rec.cimd else "untrusted")}
 
     @r.get("/")
     def home():

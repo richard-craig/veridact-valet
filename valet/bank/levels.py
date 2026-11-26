@@ -109,6 +109,12 @@ def requested_intent(details: list[dict[str, Any]] | None) -> str | None:
     return next((clean_intent(d.get("intent")) for d in (details or []) if d.get("intent")), None)
 
 
+def within(level: str, ceiling: str | None) -> bool:
+    """Is this access level at or below the agent tier's ceiling?"""
+    order = list(LEVELS)
+    return ceiling is None or order.index(level) <= order.index(ceiling)
+
+
 def find(details: list[dict[str, Any]], typ: str) -> dict[str, Any] | None:
     return next((d for d in details if d.get("type") == typ), None)
 

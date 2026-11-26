@@ -5,6 +5,16 @@ The PoC uses StaticRegistry: a bank-controlled trust file naming each agent's op
 whether it is verified, plus the public keys agents publish. In production, VeridactRegistry
 replaces it: the operator name and tier come from the agent's Veridact credential, and trust
 from Veridact's status lists and revocation push.
+
+Agents can also identify themselves with a CIMD client_id (cimd.py): an HTTPS URL serving their
+metadata and keys. That is the baseline tier. A CIMD agent the trust file also marks verified
+(standing in for a Veridact credential about the same URL) is on the Veridact tier.
+
+    tier        trusted when                                   highest level
+    veridact    verified in the registry                       Bill payer
+    platform    an AI platform the bank allowlisted            set by the MCP gateway (bearer tier: every payment approved)
+    cimd        its domain is on the bank's approved list      Approved payer
+    unverified  never                                          none
 """
 from __future__ import annotations
 
@@ -13,6 +23,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+
+from .cimd import host_of, is_cimd_client_id
 
 
 @dataclass
@@ -24,6 +36,32 @@ class AgentRecord:
     jwk: dict[str, Any]
     redirect_uris: list[str] = field(default_factory=list)
     platform: bool = False        # an AI platform's OAuth client (e.g. Claude, ChatGPT) reaching the bank via the MCP gateway
+    jwks: list[dict[str, Any]] = field(default_factory=list)    # every key the agent publishes (CIMD may list several)
+    cimd: bool = False            # identified by a client ID metadata document; trust also needs its domain approved
+
+    @property
+    def tier(self) -> str:
+        if self.platform:
+            return "platform"
+        if self.verified:
+            return "veridact"
+        return "cimd" if self.cimd else "unverified"
+
+    @property
+    def ceiling(self) -> str | None:
+        """The highest access level this agent's tier may hold. None: only the bank's own policy limits it (platform
+        clients are capped by the MCP gateway instead)."""
+        return "approved_payer" if self.tier in ("cimd", "unverified") else None
+
+    def key_for(self, kid: str | None) -> dict[str, Any] | None:
+        """The public key a signature names, by kid or JWK thumbprint; the only key when there is just one."""
+        from ..common.crypto import jwk_thumbprint
+        keys = self.jwks or ([self.jwk] if self.jwk else [])
+        if kid:
+            for k in keys:
+                if k.get("kid") == kid or jwk_thumbprint(k) == kid:
+                    return k
+        return keys[0] if len(keys) == 1 else None
 
 
 class RegistryUnavailable(Exception):
@@ -38,8 +76,9 @@ class AgentRegistry(Protocol):
 class StaticRegistry:
     """trust.json (bank-controlled) + agents/<client_id>.json (each agent's published public key)."""
 
-    def __init__(self, data_dir: Path, cache_s: int = 60):
+    def __init__(self, data_dir: Path, cache_s: int = 60, cimd=None):
         self.dir = data_dir
+        self.cimd = cimd                        # a CimdResolver (cimd.py), or None: CIMD client ids are not accepted
         self.cache_s = cache_s
         self._cache: dict[str, Any] = {}
         self._loaded = 0.0                      # when the last good copy was read
@@ -74,20 +113,37 @@ class StaticRegistry:
             # MCP gateway, which caps what they can do (bearer tier: every payment approved in the bank app).
             return AgentRecord(client_id=client_id, name=entry["name"], operator=entry["operator"],
                                verified=bool(entry.get("verified")), jwk={}, platform=True)
-        if not entry or not key_file.exists():
+        if self.cimd is not None and is_cimd_client_id(client_id):
+            return self._cimd_record(client_id, entry)
+        if not entry or "/" in client_id or not key_file.exists():
             return None
         pub = json.loads(key_file.read_text())
         return AgentRecord(client_id=client_id, name=entry["name"], operator=entry["operator"],
                            verified=bool(entry.get("verified")), jwk=pub["jwk"],
                            redirect_uris=pub.get("redirect_uris", []))
 
+    def _cimd_record(self, client_id: str, entry: dict[str, Any] | None) -> AgentRecord | None:
+        doc = self.cimd.resolve(client_id)
+        if not doc:
+            return None
+        meta, keys = doc
+        entry, host = entry or {}, host_of(client_id)
+        # The operator is the domain that served the document, which the bank checked; client_name is the agent's own
+        # claim. A trust entry (in production, the agent's Veridact credential about this URL) overrides both.
+        return AgentRecord(client_id=client_id, name=entry.get("name") or str(meta.get("client_name") or host)[:60],
+                           operator=entry.get("operator") or host, verified=bool(entry.get("verified")),
+                           jwk=keys[0], jwks=keys, redirect_uris=list(meta.get("redirect_uris") or []), cimd=True)
+
     def is_trusted(self, client_id: str, for_payment: bool = False) -> bool:
         self.check_available(for_payment)
         if client_id in self._overrides:
             return self._overrides[client_id]
         rec = self.lookup(client_id)
-        # Veridact-verified agents, or AI platforms the bank has allowlisted (capped at the bearer tier by the gateway)
-        return bool(rec and (rec.verified or rec.platform))
+        if rec and rec.cimd and not (self.cimd and self.cimd.covers(client_id)):
+            return False            # the bank took the domain off its approved list: this stops live grants too
+        # Veridact-verified agents, AI platforms the bank has allowlisted (capped at the bearer tier by the gateway),
+        # and CIMD agents from approved domains (capped at Approved payer)
+        return bool(rec and (rec.verified or rec.platform or rec.cimd))
 
     def set_trust(self, client_id: str, trusted: bool) -> None:
         """Simulates the bank, or Veridact, withdrawing trust in an agent operator."""

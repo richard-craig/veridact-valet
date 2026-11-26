@@ -178,8 +178,9 @@ def router(bank: Bank) -> APIRouter:
         return [explicit] if explicit else list(bank.external_issuers) or [cfg.issuer]
 
     # ------------------------------------------------------------ discovery (RFC 9728)
+    # The domain-level document (/.well-known/oauth-protected-resource) describes the whole bank for Poppy agents
+    # (poppy.py). MCP clients use the path-inserted one, which names the MCP server itself.
     @r.get("/.well-known/oauth-protected-resource/mcp")
-    @r.get("/.well-known/oauth-protected-resource")
     def protected_resource():
         return {"resource": resource, "authorization_servers": auth_servers(), "bearer_methods_supported": ["header"],
                 "scopes_supported": ["openid"], "resource_name": "Marula Bank (fictional) via Veridact Valet",

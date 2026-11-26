@@ -20,6 +20,7 @@ from ..common.money import to_cents
 from . import levels as L
 from .context import Bank, OAuthError
 from .grants import create_grant
+from .poppy import LEVEL_SCOPE, SCOPES, ScopeError, details_for_scopes, domain_resource
 from .web import current_customer, csrf_ok, csrf_token, needs_step_up, render, step_up
 
 KNOWN_TYPES = {"valet_accounts", "valet_payments"}
@@ -51,7 +52,17 @@ def router(bank: Bank) -> APIRouter:
                 "token_endpoint_auth_methods_supported": ["private_key_jwt"], "dpop_signing_alg_values_supported": ["ES256"],
                 "authorization_details_types_supported": ["valet_accounts", "valet_payments", "valet_payment_once"],
                 "backchannel_token_delivery_modes_supported": ["poll"], "code_challenge_methods_supported": ["S256"],
-                "grant_types_supported": ["authorization_code", "refresh_token", CIBA_GRANT]}
+                "grant_types_supported": ["authorization_code", "refresh_token", CIBA_GRANT],
+                # RFC 9728 section 4: the resources this server issues tokens for. A Poppy agent checks that the
+                # bank's domain is here before trusting the issuer poppy.json names.
+                "protected_resources": [domain_resource(bank), mcp_resource()],
+                "scopes_supported": list(SCOPES),
+                # Agents may identify themselves by an HTTPS client_id serving their metadata (cimd.py).
+                "client_id_metadata_document_supported": bank.cimd is not None}
+
+    def mcp_resource() -> str:
+        import os
+        return os.environ.get("VALET_MCP_RESOURCE", cfg.issuer.rstrip("/") + "/mcp")
 
     @r.get("/jwks")
     def jwks():
@@ -75,6 +86,13 @@ def router(bank: Bank) -> APIRouter:
                 raise OAuthError("invalid_authorization_details", "authorization_details is not JSON") from e
             if not isinstance(details, list) or any(d.get("type") not in KNOWN_TYPES for d in details):
                 raise OAuthError("invalid_authorization_details", "unknown authorization_details type")
+            if not details and form.get("scope"):
+                # A Poppy agent that knows only scopes: start the consent screen from the matching level. Where both
+                # are sent, authorization_details is the request and scope is ignored.
+                try:
+                    details = details_for_scopes(form["scope"])
+                except ScopeError as e:
+                    raise OAuthError("invalid_scope", str(e)) from e
             # The agent names its DPoP key now (RFC 9449 section 10: dpop_jkt, or a DPoP proof on this request), so
             # the grant is bound to that key when the customer consents, before any token or API call exists.
             jkt = form.get("dpop_jkt") or ""
@@ -118,8 +136,12 @@ def router(bank: Bank) -> APIRouter:
         rec = bank.registry.lookup(client_id)
         accounts = store.q("SELECT * FROM accounts WHERE customer=?", cus["id"])
         payees = store.q("SELECT id, name, account FROM beneficiaries WHERE customer=? ORDER BY name", cus["id"])
+        preselect = L.requested_level(params["details"])
+        if not L.within(preselect, rec.ceiling):
+            preselect = rec.ceiling
         return render(request, "consent.html", bank, customer=cus, agent=rec, client_id=client_id, request_uri=request_uri,
-                      preselect=L.requested_level(params["details"]), levels=L.LEVELS, accounts=accounts,
+                      preselect=preselect, levels=L.LEVELS, accounts=accounts, ceiling=rec.ceiling,
+                      within=L.within, agent_host=_host(client_id) if rec.cimd else None,
                       payees=payees, intent=L.requested_intent(params["details"]) or "", **L.consent_options(cfg),
                       days=cfg.max_grant_days, csrf=csrf_token(bank, cus["id"]))
 
@@ -180,8 +202,10 @@ def router(bank: Bank) -> APIRouter:
 
     def token_response(grant: dict[str, Any], jkt: str) -> JSONResponse:
         at = bank.issue_access_token(grant, jkt, grant["details"])
+        # scope says, in Poppy's terms, what the customer granted; authorization_details says exactly what.
         return JSONResponse({"access_token": at, "token_type": "DPoP", "expires_in": cfg.access_ttl,
                              "refresh_token": new_refresh(grant["id"], jkt), "grant_id": grant["id"],
+                             "scope": LEVEL_SCOPE[grant["level"]],
                              "authorization_details": grant["details"]}, headers={"Cache-Control": "no-store"})
 
     def code_grant(request: Request, form: dict[str, Any], rec) -> JSONResponse:
@@ -299,6 +323,11 @@ def router(bank: Bank) -> APIRouter:
             return e.response()
 
     return r
+
+
+def _host(url: str) -> str:
+    from .cimd import host_of
+    return host_of(url)
 
 
 def _payment_summary(detail: dict[str, Any]) -> dict[str, Any]:
