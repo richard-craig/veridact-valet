@@ -222,6 +222,12 @@ def router(bank: Bank) -> APIRouter:
             if intent is None:
                 new = True
                 check = mandate.check_payment(store, c.grant, to_acct, cents)
+                agent = bank.registry.lookup(c.grant["client_id"])
+                if check.covered and agent and not L.within(c.grant["level"], agent.ceiling):
+                    # The grant was made at a higher tier than the agent holds now (its Veridact credential was
+                    # withdrawn but its domain is still approved): every payment goes back to the customer.
+                    check = mandate.Check(False, "approved_payer", "this agent is now identified only by its website, "
+                                                                   "so you approve every payment it makes")
                 if check.covered:
                     intent = payments.create(c.grant, key, d, detail, cents, "reserved", "grant", instruction=instruction)
                 else:

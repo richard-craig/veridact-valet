@@ -510,7 +510,9 @@ Agent ecosystems identify an agent by an HTTPS URL serving its metadata and sign
 
 | Endpoint | Caller | Authentication | What it does |
 | --- | --- | --- | --- |
-| `GET /.well-known/oauth-authorization-server` | Agent | None | Metadata: endpoints, `private_key_jwt`, ES256 DPoP, RAR types, CIBA poll mode |
+| `GET /.well-known/oauth-authorization-server` | Agent | None | Metadata: endpoints, `private_key_jwt`, ES256 DPoP, RAR types, CIBA poll mode, Poppy scopes, `protected_resources`, `client_id_metadata_document_supported` |
+| `GET /.well-known/oauth-protected-resource` | Agent | None | RFC 9728 metadata for the bank's domain: names Valet's authorisation server; DPoP required ([Poppy extension](poppy-extension.md) §1.1) |
+| `GET /.well-known/poppy.json` | Agent | None | Poppy discovery: scopes, risk hints, the `veridact.net/valet` extension and its agent identity tiers |
 | `GET /jwks` | Anyone | None | Bank public keys for access tokens and receipts, active and previous, each with a `kid` derived from the key (`as-…`, `receipts-…`; §21) |
 | `POST /par` | Agent | `private_key_jwt` | Push the connect request (PKCE S256, redirect URI, `authorization_details`, `dpop_jkt` or a DPoP proof); returns a `request_uri` valid for 60 seconds |
 | `GET /authorize` | Browser | Customer session | Consent screen for a pushed request; asks the customer to sign in first if needed |

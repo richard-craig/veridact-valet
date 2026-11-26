@@ -51,6 +51,21 @@ The bank uses it three ways:
 
 An entry never raises the tier, so Lane A stops at Approved payer ([MCP gateway design](mcp-gateway-design.md)).
 
+## The CIMD baseline (built)
+
+Before Veridact, there is CIMD. An agent whose `client_id` is an HTTPS URL serving its client metadata can connect
+from any domain the bank approves (`VALET_CIMD`, `valet/bank/cimd.py`), with no registration. It authenticates with
+`private_key_jwt`, using the keys in its own document. The bank knows only which domain runs it, so:
+
+- the consent screen names the domain, not the agent's self-chosen name, and says "Not verified by Veridact";
+- the agent can be at most **Approved payer**, enforced at consent and again on every payment;
+- the approved list is checked on every call, so taking a domain off it stops the agent's live grants at once.
+
+Lane B adds Veridact to the **same URL**. A verified CIMD agent is on the Veridact tier and can earn Bill payer. If
+its credential is withdrawn while its domain stays approved, it drops back to the CIMD tier, and every payment under
+an existing Bill payer grant goes back to the customer for approval. In the proof of concept, a trust-file entry
+marked `verified` stands in for the credential.
+
 ## Lane B: purpose-built agents
 
 The agent's `client_id` is its Veridact identifier: a CIMD URL whose `jwks` holds its key ([§5.1](https://github.com/veridactlabs/veridact/blob/main/docs/specification.md#51-agents-are-oauth-clients)). It proves

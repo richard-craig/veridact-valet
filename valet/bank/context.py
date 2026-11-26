@@ -16,6 +16,7 @@ from .known_assistants import KnownAssistants
 from .payments import Payments
 from .policy import Policy
 from .receipts import Receipts
+from .cimd import CimdResolver
 from .registry import AgentRecord, StaticRegistry
 from .store import Store
 from .tokens import ExternalIssuer, TokenRejected, external_issuers_from_env
@@ -41,7 +42,7 @@ class OAuthError(Exception):
 class Bank:
     def __init__(self, cfg: BankConfig | None = None, registry: StaticRegistry | None = None,
                  signin: OidcSignIn | None = None, external_issuers: dict[str, ExternalIssuer] | None = None,
-                 core: CoreBanking | None = None):
+                 core: CoreBanking | None = None, cimd: CimdResolver | None = None):
         self.cfg = cfg or BankConfig()
         if problems := self.cfg.secret_problems():          # fail closed: never serve HTTPS on demo secrets
             raise RuntimeError("refusing to start: " + "; ".join(problems))
@@ -53,7 +54,9 @@ class Bank:
         self.as_keys = KeyRing.load("as", keys / "authorization-server.pem", in_memory)
         self.receipt_keys = KeyRing.load("receipts", keys / "receipts.pem", in_memory)
         self.as_key, self.receipt_key = self.as_keys.active, self.receipt_keys.active
-        self.registry = registry or StaticRegistry(self.cfg.data_dir, self.cfg.registry_cache_s)
+        approved = list((self.cfg.cimd or {}).get("approved") or [])
+        self.cimd = cimd or (CimdResolver(approved, int(self.cfg.cimd.get("cache_seconds", 300))) if approved else None)
+        self.registry = registry or StaticRegistry(self.cfg.data_dir, self.cfg.registry_cache_s, cimd=self.cimd)
         self.receipts = Receipts(self.store, self.receipt_key, self.receipt_keys)
         # Valet never executes a payment: it instructs the bank's core banking API (the PoC's fictional one here).
         self.core: CoreBanking = core or DemoCore(self.store)
@@ -103,6 +106,7 @@ class Bank:
                 "payments_escalated": len(self.payments.escalated()),
                 "native_issuers": sorted(self.external_issuers),
                 "known_assistants": self.known_assistants.readiness() if self.known_assistants else None,
+                "cimd": self.cimd.readiness() if self.cimd else None,
                 "decision_service": getattr(self.decisions, "transport", None),
                 "policy": {**self.policy.ref, "labelled": self.policy.labelled},
                 "keys": {"as": self.as_keys.custody(), "receipts": self.receipt_keys.custody()}}
@@ -203,13 +207,17 @@ class Bank:
         assertion = form["client_assertion"]
         try:
             iss = jwt.decode(assertion, options={"verify_signature": False}).get("iss", "")
+            kid = jwt.get_unverified_header(assertion).get("kid")
         except jwt.PyJWTError as e:
             raise OAuthError("invalid_client", f"malformed client assertion: {e}", 401) from e
         rec = self.registry.lookup(iss)
         if not rec:
             raise OAuthError("invalid_client", "unknown agent", 401)
+        key = rec.key_for(kid)          # a CIMD agent may publish several keys; the assertion's kid picks one
+        if not key:
+            raise OAuthError("invalid_client", "the assertion's kid names none of this agent's published keys", 401)
         try:
-            claims = verify(assertion, rec.jwk, audience=self.cfg.issuer, options={"require": ["exp", "iat", "jti", "iss", "sub"]})
+            claims = verify(assertion, key, audience=self.cfg.issuer, options={"require": ["exp", "iat", "jti", "iss", "sub"]})
         except jwt.PyJWTError as e:
             raise OAuthError("invalid_client", f"client assertion rejected: {e}", 401) from e
         if claims["sub"] != rec.client_id or form.get("client_id", rec.client_id) != rec.client_id:

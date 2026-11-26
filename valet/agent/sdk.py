@@ -121,12 +121,16 @@ class ValetClient:
             details = self.session.details          # refresh through an IdP without RAR: same grant, keep what we know
         self.session = Session(body["access_token"], body.get("refresh_token"), grant_id,
                                details, time.time() + body.get("expires_in", 300) - 15)
+        self.scope = body.get("scope")
 
     # ------------------------------------------------------------ connect
     async def start_connect(self, level: str = "bill_payer", account_hint: str | None = None,
-                            intent: str | None = None) -> tuple[str, PendingConnect]:
+                            intent: str | None = None, scope: str | None = None) -> tuple[str, PendingConnect]:
         """Push the request (PAR) and return the URL to send the customer to. `intent` is the purpose the agent
-        states (up to 140 characters); the customer sees it on the consent screen and can change it."""
+        states (up to 140 characters); the customer sees it on the consent screen and can change it.
+
+        `scope` asks the way a plain Personal Agent Protocol agent would: Poppy scopes from the bank's poppy.json
+        (e.g. "payments:standing") and no authorization_details. The bank turns them into the same consent screen."""
         verifier = b64u(secrets.token_bytes(32))
         challenge = b64u(hashlib.sha256(verifier.encode()).digest())
         details = [{"type": "valet_accounts", "actions": ["read_balances", "read_transactions"]}]
@@ -146,7 +150,8 @@ class ValetClient:
                                     audience=self.connect_via.issuer)
             base = self.connect_via.authorize
         else:
-            body = await self._post_form("/par", {**req, "authorization_details": json.dumps(details)})
+            ask = {"scope": scope} if scope else {"authorization_details": json.dumps(details)}
+            body = await self._post_form("/par", {**req, **ask})
             base = self.public_bank_url + "/authorize"
         url = base + "?" + urlencode({"client_id": self.client_id, "request_uri": body["request_uri"]})
         return url, PendingConnect(state, verifier)

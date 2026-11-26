@@ -180,7 +180,7 @@ What CIMD proves, and what it doesn't:
 Valet's position:
 
 - **Never open Dynamic Client Registration.** It creates anonymous clients the bank can't reason about.
-- **Allowlist agent identities, each with a tier.** Accept CIMD from an allowlist of platform URLs where a platform offers it; use a pre-registered confidential client where the platform allows a secret, because that adds client authentication at the token endpoint.
+- **Allowlist agent identities, each with a tier.** CIMD is the entry tier: an agent from a domain the bank approves connects with no registration, signs with keys from its own document (`private_key_jwt`), and can be at most Approved payer, so the customer approves every payment. A Veridact credential about the same URL is the tier above, and can earn Bill payer. *(Built: `valet/bank/cimd.py`.)* For platforms whose CIMD client is public, use a pre-registered confidential client where the platform allows a secret, because that adds client authentication at the token endpoint.
 - **Use one identity URL for both jobs.** In Veridact v0.5 (proposed) the agent's CIMD URL is its Veridact identifier, so the same URL serves OAuth client identification and Veridact verification. *(Proposed; see §8.)*
 
 ## 6. How Valet lines up with agent payment standards
